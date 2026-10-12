@@ -65,9 +65,9 @@ int main() {
           "3\n5\n5\n0\n" },
 
         { "os_exec: feeds stdin, handles large output both ways without deadlock",
-          "r = os_exec([\"findstr\", \"^\"], \"hello stdin\")\nprint(len(r[\"stdout\"]) >= 11)\n"
+          "r = os_exec([\"sort\"], \"hello stdin\")\nprint(len(r[\"stdout\"]) >= 11)\n"
           "line = \"0123456789abcde\\n\"\nbig = line\ni = 0\nwhile i < 14\nbig = big + big\ni = i + 1\nend\n"
-          "r = os_exec([\"findstr\", \"^\"], big)\nprint(len(r[\"stdout\"]) >= len(big))\n",
+          "r = os_exec([\"sort\"], big)\nprint(len(r[\"stdout\"]) >= len(big))\n",
           "1\n1\n" },
 
         { "os_exec: exit code is reported; bad program and bad argv raise",

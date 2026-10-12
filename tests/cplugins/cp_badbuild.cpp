@@ -16,5 +16,6 @@ extern "C" EMBR_PLUGIN_EXPORT const EmbrPluginInfo* embr_plugin_info(void) {
 }
 
 EMBR_PLUGIN {
+    (void)interp;
     std::fputs("REGISTER-RAN\n", stderr);
 }

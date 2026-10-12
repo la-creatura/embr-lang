@@ -131,14 +131,14 @@ jobs:
       - name: build this commit
         run: |
           cmake --preset linux-release
-          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin json_plugin -j"$(nproc)"
+          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin json_plugin str_plugin -j"$(nproc)"
       - name: build the base commit
         if: steps.base.outputs.sha != ''
         run: |
           git worktree add ../embr-base "${{ steps.base.outputs.sha }}"
           cd ../embr-base
           cmake --preset linux-release
-          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin json_plugin -j"$(nproc)"
+          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin json_plugin str_plugin -j"$(nproc)"
       - name: check times
         env:
           BASE: ${{ steps.base.outputs.sha != '' && '../embr-base/bin/linux/embr' || '' }}
