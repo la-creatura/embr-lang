@@ -5,7 +5,7 @@
 embr (Embeddable/Extensible Meta-Binding Runtime) & (EMBR Makes Binding Reliable)
 was created solely because i wanted a single header scripting language and the lua vm pissed me off. with this, you can include one file and be able to use it for configs, scripting and dynamic plugin loading, or download a release (a tarball on the github releases page, unpack it anywhere, `bin/embr` finds its plugins by itself) and use the cli interpreter to run scripts.
 
-![license](https://img.shields.io/badge/license-GPL%203.0-blue.svg) ![version](https://img.shields.io/badge/version-1.0.0-green.svg) [![ci](https://github.com/la-creatura/embr-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/la-creatura/embr-lang/actions/workflows/ci.yml)
+![license](https://img.shields.io/badge/license-MIT-blue.svg) ![version](https://img.shields.io/badge/version-1.0.0-green.svg) [![ci](https://github.com/la-creatura/embr-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/la-creatura/embr-lang/actions/workflows/ci.yml)
 
 ## table of contents
 
