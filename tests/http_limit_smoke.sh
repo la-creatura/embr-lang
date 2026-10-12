@@ -27,7 +27,7 @@ open(sys.argv[1], "w").write(str(s.server_address[1]))
 s.serve_forever()
 PY
 server_pid=$!
-for tries in $(seq 1 100); do [[ -s "$work/port" ]] && break; sleep 0.1; done
+for tries in $(seq 1 300); do [[ -s "$work/port" ]] && break; sleep 0.1; done
 [[ -s "$work/port" ]] || { echo "server did not start:"; cat "$work/server.err"; exit 1; }
 port="$(cat "$work/port")"
 

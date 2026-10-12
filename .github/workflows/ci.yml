@@ -225,4 +225,4 @@ jobs:
         # -k keeps going after an error, so one run lists every compile problem instead of the first few
         run: cmake --build build/macos-debug -j"$(sysctl -n hw.ncpu)" -- -k
       - name: test
-        run: ctest --test-dir build/macos-debug -j"$(sysctl -n hw.ncpu)" --output-on-failure --timeout "$CTEST_TIMEOUT"
+        run: ctest --test-dir build/macos-debug -j"$(sysctl -n hw.ncpu)" --output-on-failure --timeout 300

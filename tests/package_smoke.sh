@@ -8,6 +8,9 @@ set -u
 embr="$1"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 fail=0
+
+# sed -i differs between GNU and BSD (macos) sed, so edit through a second file
+sedi() { sed "$1" "$2" > "$2.sedi" && mv "$2.sedi" "$2"; }
 export EMBR_PATH="$(dirname "$embr")"
 export EMBR_PACKAGE_DIR="$work/cache"
 export XDG_CONFIG_HOME="$work/config"
@@ -384,7 +387,7 @@ EOF
 mkdir -p np_ok; cp np.pmbr np_ok/; printf 'import "np"\nprint("NP-LOADED")\n' > np_ok/t.embr
 out="$(cd np_ok && "$embr" t.embr 2>&1)"
 has "requires: a loose plugin at the right version" "$out" "NP-LOADED"
-sed -i "s/\"json\": \"$json_version\"/\"json\": \"99.0.0\"/" src_needs_plugin/meta.embr
+sedi "s/\"json\": \"$json_version\"/\"json\": \"99.0.0\"/" src_needs_plugin/meta.embr
 "$embr" pack src_needs_plugin -o np2.pmbr >/dev/null 2>&1; mkdir -p np_bad; cp np2.pmbr np_bad/np.pmbr; printf 'import "np"\n' > np_bad/t.embr
 out="$(cd np_bad && "$embr" t.embr 2>&1)"
 has "requires: a loose plugin at another version" "$out" "it requires json 99.0.0 but"
@@ -525,7 +528,7 @@ import "package"
 dir = pmbr_unpack("packages/adder.pmbr")
 print(package_path("adder", "lib/{target}/libadder.so") != "")
 EOF
-    sed -i "s/libadder.so/libadder.$ext/" t.embr
+    sedi "s/libadder.so/libadder.$ext/" t.embr
     out="$("$embr" t.embr 2>&1)"
     has "pmbr_unpack registers the package for package_path" "$out" "1"
 fi
@@ -829,7 +832,7 @@ printf '__package__ = {"name": "path", "version": "1.0.0", "description": "x", "
 out="$("$embr" pack src_abi2 -o abi2.pmbr 2>&1)"; rc=$?
 (( rc == 0 )) || { echo "FAIL [pack a C plugin as the c build]: $out"; fail=1; }
 write_abi_meta src_abi2 "{\"$target\": {\"$hosttag\": \"lib/path.$ext\"}}"
-sed -i 's/"name": "str"/"name": "path"/' src_abi2/meta.embr
+sedi 's/"name": "str"/"name": "path"/' src_abi2/meta.embr
 out="$("$embr" pack src_abi2 -o abi2b.pmbr 2>&1)"; rc=$?
 (( rc != 0 )) || { echo "FAIL [pack: a C plugin listed under a C++ tag]"; fail=1; }
 has "pack: a C plugin is the c build" "$out" "has the C++ ABI c, but meta.embr lists it as $hosttag"

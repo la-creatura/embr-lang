@@ -78,7 +78,18 @@ step(list("print(2)") + [LEFT, LEFT] + list("4") + [RIGHT] + list("5") + [ENTER]
      "left and right move the cursor, typing inserts there")
 step([UP, ENTER], "425\n", "up recalls the last line")
 step(list("x = 7") + [ENTER] + [UP, UP, DOWN] + [ENTER], "x = 7\n>>> ", "down goes back toward the newest line", absent="425\n")
-step(["fn sq(n)", ENTER, "    return n * n", ENTER, "end", ENTER, ENTER], ">>> ", "a function typed over several lines")
+# the prompt is already on screen, so waiting for ">>> " would pass before the lines are read. wait until the
+# continuation prompts have shown up and the last line is a fresh prompt
+start = len(plain())
+typed(["fn sq(n)", ENTER, "    return n * n", ENTER, "end", ENTER, ENTER])
+end = time.time() + 10
+while time.time() < end:
+    new = plain()[start:]
+    if new.count("... ") >= 3 and new.rstrip().endswith(">>>"):
+        break
+    read_for(0.1)
+else:
+    fail("a function typed over several lines")
 step(list("sq(9)") + [ENTER], "81\n", "the multi-line function was defined")
 step(list("nope(1)") + [ENTER], "undefined variable", "an error is reported")
 step(list("print(x)") + [ENTER], "7\n", "the session survives an error and keeps its variables")

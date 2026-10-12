@@ -451,7 +451,7 @@ static std::string mutate(std::string s, const std::vector<std::string>& pool) {
             case 7: if (s.size() > 1) s.resize(1 + rnd(s.size() - 1)); break;   // truncate
             default: if (!s.empty()) { size_t a = rnd(s.size()), b = rnd(s.size()); std::swap(s[a], s[b]); } break;
         }
-        if (s.size() > (1u << 20)) s.resize(1u << 20);
+        if (s.size() > (256u << 10)) s.resize(256u << 10);   // big inputs only make a run slow under ASan, not more likely to find something
     }
     return s;
 }
