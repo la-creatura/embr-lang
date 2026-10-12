@@ -191,10 +191,12 @@ out="$( ulimit -v 400000 2>/dev/null; "$embr" ${flags[@]+"${flags[@]}"} "$work/o
 fi
 
 # a step or time limit stops a script that never ends, and the script can't catch it
+# macos has no `timeout` (coreutils calls it gtimeout), without either this runs with no wall clock limit
+if command -v timeout >/dev/null; then limit="timeout 20"; elif command -v gtimeout >/dev/null; then limit="gtimeout 20"; else limit=""; fi
 budget() {   # name, source, flag, expected substring
     printf '%s\n' "$2" > "$work/b.embr"
     local out rc
-    out="$(timeout 20 "$embr" ${flags[@]+"${flags[@]}"} "$3" "$work/b.embr" 2>&1)"; rc=$?
+    out="$($limit "$embr" ${flags[@]+"${flags[@]}"} "$3" "$work/b.embr" 2>&1)"; rc=$?
     if [[ $rc -ne 1 || "$out" != *"$4"* || "$out" == *"swallowed"* ]]; then
         echo "FAIL [$1]: rc=$rc ${out:0:200}"; fail=1
     fi
