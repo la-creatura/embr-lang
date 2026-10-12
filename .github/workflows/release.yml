@@ -1,8 +1,11 @@
 # release for embr. runs when a tag like v1.0.0 is pushed: builds the linux-release preset,
 # runs the tests, packs embr-<version>-linux-<arch>.tar.gz (see the CPACK_* lines in CMakeLists.txt), and
 # attaches it, its .sha256 (install.sh checks it) and the single header (embr.h) to a GitHub release.
+# then the windows job cross-builds embr-<version>-windows-<arch>.zip with mingw-w64 and adds it and its .sha256
+# to the same release. the windows tests run in ci (the windows job in ci.yml), not here.
 #
-#   git tag v1.0.0 && git push origin v1.0.0
+# the git remote of this repo is called `main`, not `origin`:
+#   git tag v1.0.0 && git push main v1.0.0
 #
 # the tag has to match project(embr VERSION ...) in CMakeLists.txt, or the job stops before building.
 
@@ -45,3 +48,32 @@ jobs:
           cp build/linux-release/generated/embr/embr.h embr.h
           gh release create "$GITHUB_REF_NAME" --generate-notes \
             build/linux-release/embr-*.tar.gz build/linux-release/embr-*.tar.gz.sha256 embr.h
+
+  # builds after the linux job, because that job creates the release this one adds to
+  windows:
+    needs: linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: install dependencies
+        # only the 64 bit cross compiler (posix threads, embr uses threads); the mingw-w64 package brings much more
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+      - name: configure
+        run: cmake --preset windows-release -DCMAKE_CXX_FLAGS=-Werror
+      - name: build
+        run: cmake --build build/windows-release -j"$(nproc)"
+      - name: package
+        run: cmake --build build/windows-release --target package
+      - name: checksum
+        run: cd build/windows-release && for f in embr-*.zip; do sha256sum "$f" > "$f.sha256"; done
+      - name: add to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" build/windows-release/embr-*.zip build/windows-release/embr-*.zip.sha256
