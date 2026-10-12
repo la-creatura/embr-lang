@@ -2291,7 +2291,7 @@ inline void verifyStack(const CompiledProgram& prog, const char* what);
 // the member of an overload group for some arguments, defined after VmRunner (see there)
 inline const Value* pickOverload(Interpreter& interp, const std::string& base, const Value* args, size_t n, std::string& err);
 
-class VmRunner : private Interpreter::GcFrameSource {
+class VmRunner final : private Interpreter::GcFrameSource {
 public:
     enum class State { Ready, Running, Suspended, Done, Error };
 

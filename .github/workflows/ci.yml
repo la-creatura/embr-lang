@@ -131,14 +131,14 @@ jobs:
       - name: build this commit
         run: |
           cmake --preset linux-release
-          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin -j"$(nproc)"
+          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin json_plugin -j"$(nproc)"
       - name: build the base commit
         if: steps.base.outputs.sha != ''
         run: |
           git worktree add ../embr-base "${{ steps.base.outputs.sha }}"
           cd ../embr-base
           cmake --preset linux-release
-          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin -j"$(nproc)"
+          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin json_plugin -j"$(nproc)"
       - name: check times
         env:
           BASE: ${{ steps.base.outputs.sha != '' && '../embr-base/bin/linux/embr' || '' }}
@@ -186,7 +186,14 @@ jobs:
         with:
           submodules: true
       - name: install dependencies
-        run: sudo apt-get update && sudo apt-get install -y mingw-w64 wine
+        # only the 64 bit cross compiler and wine. the mingw-w64 and wine packages also bring the 32 bit compiler and
+        # a lot of audio and video libraries (2 GB), which this job never uses
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64-posix g++-mingw-w64-x86-64-posix binutils-mingw-w64-x86-64 wine wine64
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
       - name: configure
         run: cmake --preset windows-release -DCMAKE_CXX_FLAGS=-Werror -DCMAKE_CROSSCOMPILING_EMULATOR=wine
       - name: build

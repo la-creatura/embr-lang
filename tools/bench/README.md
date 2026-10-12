@@ -3,7 +3,7 @@
 ```bash
 # use a Release build for real numbers (a Debug build measures -O0 code):
 cmake --preset linux-release
-cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin -j"$(nproc)"
+cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin json_plugin -j"$(nproc)"
 tools/bench/run.sh                 # best of RUNS=3, all benchmarks
 tools/bench/run.sh fib closure     # only these
 ```

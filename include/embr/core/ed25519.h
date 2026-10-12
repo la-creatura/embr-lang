@@ -291,7 +291,7 @@ inline void sign(const unsigned char* msg, size_t len, const unsigned char sec[6
     sha512(sec, 32, d);
     d[0] &= 248; d[31] &= 127; d[31] |= 64;
     std::vector<unsigned char> buf(len + 64);
-    std::memcpy(buf.data() + 64, msg, len);
+    if (len) std::memcpy(buf.data() + 64, msg, len);
     for (int i = 0; i < 32; ++i) buf[32 + i] = d[32 + i];
     sha512(buf.data() + 32, len + 32, r);
     reduce(r);

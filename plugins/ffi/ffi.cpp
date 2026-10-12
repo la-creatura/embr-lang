@@ -191,10 +191,10 @@ static int64_t nfixedArg(const Value& v, const std::string& context) {
 // used for ffi_call/ffi_invoke return values, ptr_read, and
 // unmarshalling callback arguments
 //
-// libffi promotes integer return values smaller than ffi_arg (register width) into full ffi_arg-sized slot
-// must read ffi_arg and then narrow rather than reading only sz bytes
-// otherwise get garbage on big-endian platforms and potential reads of uninitialised memory on little-endian ones
-static Value unmarshalReturn(const TypeDesc& d, const void* buf) {
+// libffi widens a small integer return value to a whole ffi_arg, so retSlot reads that and narrows (reading only the
+// real width gives garbage on big-endian). any other memory (struct fields, callback arguments, ptr_read) holds just the
+// real width, and reading more would run past it.
+static Value unmarshalReturn(const TypeDesc& d, const void* buf, bool retSlot = false) {
     using Kind = TypeDesc::Kind;
     if (d.kind == Kind::Void) return Value(0.0);
 
@@ -227,15 +227,15 @@ static Value unmarshalReturn(const TypeDesc& d, const void* buf) {
     // above INT64_MAX still can't be exact (embr has one signed 64-bit int type)
     if (w.isSigned) {
         switch (w.size) {
-            case 1: { ffi_sarg v; memcpy(&v, buf, sizeof(v)); return Value((int64_t)(int8_t)v);  }
-            case 2: { ffi_sarg v; memcpy(&v, buf, sizeof(v)); return Value((int64_t)(int16_t)v); }
+            case 1: { if (!retSlot) return Value((int64_t)*(const int8_t*)buf); ffi_sarg v; memcpy(&v, buf, sizeof(v)); return Value((int64_t)(int8_t)v);  }
+            case 2: { if (!retSlot) { int16_t h; memcpy(&h, buf, 2); return Value((int64_t)h); } ffi_sarg v; memcpy(&v, buf, sizeof(v)); return Value((int64_t)(int16_t)v); }
             case 4: { int32_t  v; memcpy(&v, buf, 4);         return Value((int64_t)v); }
             case 8: { int64_t  v; memcpy(&v, buf, 8);         return Value(v); }
         }
     } else {
         switch (w.size) {
-            case 1: { ffi_arg  v; memcpy(&v, buf, sizeof(v)); return Value((int64_t)(uint8_t)v);  }
-            case 2: { ffi_arg  v; memcpy(&v, buf, sizeof(v)); return Value((int64_t)(uint16_t)v); }
+            case 1: { if (!retSlot) return Value((int64_t)*(const uint8_t*)buf); ffi_arg v; memcpy(&v, buf, sizeof(v)); return Value((int64_t)(uint8_t)v);  }
+            case 2: { if (!retSlot) { uint16_t h; memcpy(&h, buf, 2); return Value((int64_t)h); } ffi_arg v; memcpy(&v, buf, sizeof(v)); return Value((int64_t)(uint16_t)v); }
             case 4: { uint32_t v; memcpy(&v, buf, 4);         return Value((int64_t)v); }
             case 8: { uint64_t v; memcpy(&v, buf, 8);         return Value((int64_t)v); }
         }
@@ -379,7 +379,7 @@ static Value performCall(const std::string&                       context,
         std::rethrow_exception(e);
     }
 
-    return unmarshalReturn(retInfo, retbuf.data());
+    return unmarshalReturn(retInfo, retbuf.data(), true);
 }
 
 // Value -> raw memory at an arbitrary address, per a type descriptor. used by ptr_write and for struct fields

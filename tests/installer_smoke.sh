@@ -73,8 +73,13 @@ if command -v update-mime-database >/dev/null && command -v gio >/dev/null; then
         got="$(XDG_DATA_HOME="$d" gio info -a standard::content-type "$work/$f" 2>/dev/null | sed -n 's/.*content-type: //p')"
         [[ "$got" == "$want" ]] || bad "$f should be $want, gio says '$got'"
     done
-    got="$(XDG_DATA_HOME="$d" gio mime text/x-embr 2>/dev/null | head -n 1)"
-    [[ "$got" == *embr.desktop* ]] || bad "embr is not the default for .embr: $got"
+    # the default comes from mimeinfo.cache, which only update-desktop-database writes
+    if command -v update-desktop-database >/dev/null; then
+        got="$(XDG_DATA_HOME="$d" gio mime text/x-embr 2>/dev/null | head -n 1)"
+        [[ "$got" == *embr.desktop* ]] || bad "embr is not the default for .embr: $got"
+    else
+        echo "note: no update-desktop-database, the default app check was skipped"
+    fi
 else
     echo "note: no update-mime-database or gio, the file type checks were skipped"
 fi
