@@ -63,6 +63,11 @@ printf 'x = "unterminated\n' > "$work/bad.embr"; cp "$work/bad.embr" "$work/bad.
 cmp -s "$work/bad.embr" "$work/bad.orig" || bad "unlexable file was modified"
 "$embr" fmt "$work/missing.embr" >/dev/null 2>&1; [[ $? -eq 2 ]] || bad "missing file should exit 2"
 
+# a dot after a number keeps its space: `3 .4` is the int 3, a dot and the int 4, and `3.4` would be a float (found by the fuzzer)
+printf 'm = [3 .47841760435743, 1]\n' > "$work/dot.embr"
+"$embr" fmt "$work/dot.embr" >/dev/null 2>"$work/err" || bad "a dot after a number: $(cat "$work/err")"
+grep -q '3 \.4784' "$work/dot.embr" || bad "a dot after a number lost its space: $(cat "$work/dot.embr")"
+
 # very deep nesting must not blow up the output (indent is capped)
 for i in $(seq 1 20000); do echo "if 1"; done > "$work/deep.embr"
 # macos has no `timeout` (coreutils calls it gtimeout), without either this runs with no time limit

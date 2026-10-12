@@ -198,6 +198,7 @@ struct Layout {
         if (unaryBefore) return false;
         if (cur == T::Comma || cur == T::RParen || cur == T::RBracket || cur == T::RCurly || cur == T::Colon) return false;
         if (prev == T::LParen || prev == T::LBracket || prev == T::LCurly) return false;
+        if (cur == T::Dot && prev == T::Number) return true;      // `3 .4` must not become the float `3.4`
         if (cur == T::Dot || prev == T::Dot || prev == T::Ellipsis) return false;
         if (cur == T::Ellipsis && isOperand(prev)) return false;   // a range, `[0...10]`; a rest parameter follows a comma or a bracket and keeps its space
         if (cur == T::LParen) return !(isOperand(prev) && prev != T::Number && prev != T::String) && prev != T::Fn;

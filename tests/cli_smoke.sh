@@ -178,8 +178,9 @@ out="$("$embr" ${flags[@]+"${flags[@]}"} "$work/f1.embr" "$work/f2.embr" 2>&1)";
 [[ $rc -eq 1 && "$out" == *"cannot assign str to 'shared_v'"* && "$out" != *second* ]] || { echo "FAIL [a global keeps its type in the next file]: rc=$rc ${out:0:200}"; fail=1; }
 
 # running out of memory is an error a script can catch, not a crash. a memory limit keeps the test small. a
-# sanitizer build can't start under one (it reserves a huge address range), so those builds skip this part
-if ( ulimit -v 400000 2>/dev/null; "$embr" --version >/dev/null 2>&1 ); then
+# sanitizer build can't start under one (it reserves a huge address range), so those builds skip this part.
+# macos accepts ulimit -v but does not enforce it, so the loop would eat the machine's memory there
+if [[ "$(uname)" != Darwin ]] && ( ulimit -v 400000 2>/dev/null; "$embr" --version >/dev/null 2>&1 ); then
 printf 'a = "x"\ntry\n  while 1\n    a = a + a\n  end\ncatch e\n  print("caught")\nend\nprint("after")\n' > "$work/oom.embr"
 out="$( ulimit -v 400000 2>/dev/null; "$embr" ${flags[@]+"${flags[@]}"} "$work/oom.embr" 2>&1 )"; rc=$?
 [[ $rc -eq 0 && "$out" == *caught* && "$out" == *after* ]] || { echo "FAIL [out of memory is a catchable error]: rc=$rc ${out:0:200}"; fail=1; }

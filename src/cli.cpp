@@ -1280,10 +1280,11 @@ struct RawMode {
             raw.c_lflag &= ~(ICANON | ECHO | ISIG);
             raw.c_cc[VMIN]  = 1;
             raw.c_cc[VTIME] = 0;
-            if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == 0) ok = true;
+            // TCSADRAIN, not TCSAFLUSH: flush would throw away what was already typed or pasted for the next line
+            if (tcsetattr(STDIN_FILENO, TCSADRAIN, &raw) == 0) ok = true;
         }
     }
-    ~RawMode() { if (ok) tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig); }
+    ~RawMode() { if (ok) tcsetattr(STDIN_FILENO, TCSADRAIN, &orig); }
     RawMode(const RawMode&) = delete;
     RawMode& operator=(const RawMode&) = delete;
 };
