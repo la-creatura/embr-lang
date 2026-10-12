@@ -1,0 +1,525 @@
+{
+ "_released": true,
+ "module:cheader": {
+  "functions": {
+   "cheader_eval": "fn cheader_eval(expression, ...rest)",
+   "cheader_load": "fn cheader_load(path, ...rest)",
+   "cheader_parse": "fn cheader_parse(text, ...rest)"
+  },
+  "version": "1.0.0"
+ },
+ "module:ffi": {
+  "functions": {
+   "ffi_bind": "fn ffi_bind(lib, header, ...rest)",
+   "ffi_cdef": "fn ffi_cdef(lib, decl)",
+   "ffi_cdef_at": "fn ffi_cdef_at(address, decl)",
+   "ffi_ctype": "fn ffi_ctype(text)",
+   "ffi_typedef": "fn ffi_typedef(name, desc)"
+  },
+  "version": "1.0.0"
+ },
+ "module:parallel": {
+  "functions": {
+   "worker_map": "fn worker_map(module_path, fn_name, inputs, n_workers)"
+  },
+  "version": "1.0.0"
+ },
+ "module:pkg": {
+  "functions": {
+   "pkg_configure": "fn pkg_configure(opts)",
+   "pkg_download": "fn pkg_download(name, version, versionEntry)",
+   "pkg_fetch_index": "fn pkg_fetch_index()",
+   "pkg_info": "fn pkg_info(name, spec)",
+   "pkg_install": "fn pkg_install(name, spec)",
+   "pkg_install_project": "fn pkg_install_project()",
+   "pkg_list": "fn pkg_list()",
+   "pkg_load_manifest": "fn pkg_load_manifest()",
+   "pkg_load_project": "fn pkg_load_project()",
+   "pkg_main": "fn pkg_main(argv)",
+   "pkg_remove": "fn pkg_remove(name)",
+   "pkg_resolve": "fn pkg_resolve(index, name, spec)",
+   "pkg_resolve_all": "fn pkg_resolve_all(index, wants)",
+   "pkg_save_manifest": "fn pkg_save_manifest(m)",
+   "pkg_verify": "fn pkg_verify(name, spec)",
+   "pkg_versions": "fn pkg_versions(index, name)"
+  },
+  "version": "1.0.0"
+ },
+ "module:testing": {
+  "functions": {
+   "assert_eq": "fn assert_eq(actual, expected, ...note)",
+   "assert_false": "fn assert_false(cond, ...note)",
+   "assert_ne": "fn assert_ne(actual, unexpected, ...note)",
+   "assert_near": "fn assert_near(actual, expected, eps, ...note)",
+   "assert_raises": "fn assert_raises(f, ...note)",
+   "assert_raises_with": "fn assert_raises_with(f, text, ...note)",
+   "assert_true": "fn assert_true(cond, ...note)",
+   "fail": "fn fail(msg)"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:async": {
+  "functions": {
+   "async_all": "fn async_all(promises: arr) -> arr",
+   "async_await": "fn async_await(p: ptr) -> map",
+   "async_pool_size": "fn async_pool_size(n: num) -> float",
+   "async_queue_limit": "fn async_queue_limit(n?: num) -> int",
+   "async_spawn": "fn async_spawn(module_path: str, fn_name: str, arg) -> ptr",
+   "async_try_await": "fn async_try_await(p: ptr) -> map"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:coroutine": {
+  "functions": {
+   "coroutine_create": "fn coroutine_create(fn: fn)",
+   "coroutine_resume": "fn coroutine_resume(co: ptr, value?)",
+   "coroutine_status": "fn coroutine_status(co: ptr)",
+   "coroutine_yield": "fn coroutine_yield(value?)"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:csv": {
+  "functions": {
+   "csv_parse": "fn csv_parse(text: str, delimiter?: str) -> arr",
+   "csv_parse_dicts": "fn csv_parse_dicts(text: str, delimiter?: str) -> arr",
+   "csv_stringify": "fn csv_stringify(rows: arr|ptr, delimiter?: str) -> str"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:embrlib": {
+  "functions": {
+   "all_do": "fn all_do(arr: arr, pred: fn|ptr) -> int",
+   "any_do": "fn any_do(arr: arr, pred: fn|ptr) -> int",
+   "append": "fn append(&arr: arr, val) -> int",
+   "append_file": "fn append_file(path: str, contents: str) -> float",
+   "assert": "fn assert(cond, msg?: str) -> float",
+   "call": "fn call(fn: fn|ptr, args?: arr)",
+   "chunk": "fn chunk(arr: arr, n: num) -> arr",
+   "concat": "fn concat(a: str|arr, b: str|arr, ...more: str|arr) -> str|arr",
+   "count_do": "fn count_do(arr: arr, pred: fn|ptr) -> int",
+   "do": "fn do(fn: fn|ptr)",
+   "drop": "fn drop(arr: arr, n: num) -> arr",
+   "enumerate": "fn enumerate(arr: arr, start?: num) -> arr",
+   "error": "fn error(msg: str)",
+   "filter": "fn filter(arr: arr, pred: fn|ptr) -> arr",
+   "find_do": "fn find_do(arr: arr, pred: fn|ptr, default?)",
+   "find_index_do": "fn find_index_do(arr: arr, pred: fn|ptr) -> int",
+   "flatten": "fn flatten(arr: arr, depth?: num) -> arr",
+   "fn_arity": "fn fn_arity(fn: fn|ptr) -> int",
+   "fn_name": "fn fn_name(fn: fn|ptr) -> str",
+   "fn_sig": "fn fn_sig(fn: fn|ptr) -> str",
+   "for_each_do": "fn for_each_do(container: str|arr|map, fn: fn|ptr) -> arr|map",
+   "group_by": "fn group_by(arr: arr, keyfn: fn|ptr) -> map",
+   "has": "fn has(container: arr|map|ptr, key)",
+   "if_do": "fn if_do(cond, then_fn: fn|ptr, else_fn?: fn|ptr)",
+   "index_of": "fn index_of(arr: arr, value) -> int",
+   "input": "fn input(prompt?: str) -> str",
+   "insert": "fn insert(&arr: arr, pos: num, val) -> int",
+   "is_native": "fn is_native(fn: fn|ptr) -> int",
+   "items": "fn items(m: map) -> arr",
+   "join": "fn join(arr: arr, sep?: str) -> str",
+   "keys": "fn keys(m: map) -> arr<str>",
+   "len": "fn len(val)",
+   "load_file": "fn load_file(path: str) -> str",
+   "load_module": "fn load_module(path: str, reload?)",
+   "map_merge": "fn map_merge(a: map, b: map) -> map",
+   "map_omit": "fn map_omit(m: map, keys: arr) -> map",
+   "map_pick": "fn map_pick(m: map, keys: arr) -> map",
+   "max": "fn max(arr: arr)",
+   "max_do": "fn max_do(arr: arr, weight: fn|ptr)",
+   "min": "fn min(arr: arr)",
+   "min_do": "fn min_do(arr: arr, weight: fn|ptr)",
+   "num": "fn num(val: num|str) -> num",
+   "partition": "fn partition(arr: arr, pred: fn|ptr) -> arr",
+   "pop": "fn pop(arr: arr|ptr)",
+   "push": "fn push(arr: arr|ptr, val)",
+   "range": "fn range(start: num, end: num, step?: num) -> arr<num>",
+   "reduce": "fn reduce(arr: arr, fn: fn|ptr, init)",
+   "remove_at": "fn remove_at(&arr: arr, pos: num)",
+   "remove_key": "fn remove_key(&m: map, key: str) -> int",
+   "remove_last": "fn remove_last(&arr: arr)",
+   "reverse": "fn reverse(v: str|arr) -> str|arr",
+   "slice": "fn slice(container: str|arr|map, start: num, end?: num) -> str|arr|map",
+   "sort": "fn sort(arr: arr, descending?) -> arr",
+   "sort_cmp": "fn sort_cmp(arr: arr, cmp: fn|ptr, descending?) -> arr",
+   "sort_do": "fn sort_do(arr: arr, weight: fn|ptr, descending?) -> arr",
+   "str": "fn str(val)",
+   "sum": "fn sum(arr: arr) -> num",
+   "take": "fn take(arr: arr, n: num) -> arr",
+   "type": "fn type(val)",
+   "unique": "fn unique(arr: arr) -> arr",
+   "values": "fn values(m: map) -> arr",
+   "while_do": "fn while_do(cond_fn: fn|ptr, body_fn: fn|ptr)",
+   "write_file": "fn write_file(path: str, contents: str) -> float",
+   "zip": "fn zip(a: arr, b: arr, ...more: arr) -> arr"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:embrmath": {
+  "functions": {
+   "math_abs__1": "fn math_abs__1(x: int) -> int",
+   "math_abs__2": "fn math_abs__2(x: float) -> float",
+   "math_acos": "fn math_acos(x: num) -> float",
+   "math_asin": "fn math_asin(x: num) -> float",
+   "math_atan": "fn math_atan(x: num) -> float",
+   "math_atan2": "fn math_atan2(y: num, x: num) -> float",
+   "math_ceil__1": "fn math_ceil__1(x: int) -> int",
+   "math_ceil__2": "fn math_ceil__2(x: float) -> num",
+   "math_clamp__1": "fn math_clamp__1(x: int, lo: int, hi: int) -> int",
+   "math_clamp__2": "fn math_clamp__2(x: float, lo: float, hi: float) -> float",
+   "math_clamp__3": "fn math_clamp__3(x: num, lo: num, hi: num) -> num",
+   "math_cos": "fn math_cos(x: num) -> float",
+   "math_exp": "fn math_exp(x: num) -> float",
+   "math_floor__1": "fn math_floor__1(x: int) -> int",
+   "math_floor__2": "fn math_floor__2(x: float) -> num",
+   "math_log": "fn math_log(x: num) -> float",
+   "math_log10": "fn math_log10(x: num) -> float",
+   "math_log2": "fn math_log2(x: num) -> float",
+   "math_max__1": "fn math_max__1(a: int, b: int) -> int",
+   "math_max__2": "fn math_max__2(a: float, b: float) -> float",
+   "math_max__3": "fn math_max__3(a: num, b: num) -> num",
+   "math_min__1": "fn math_min__1(a: int, b: int) -> int",
+   "math_min__2": "fn math_min__2(a: float, b: float) -> float",
+   "math_min__3": "fn math_min__3(a: num, b: num) -> num",
+   "math_pow": "fn math_pow(x: num, y: num) -> float",
+   "math_randint": "fn math_randint(lo: num, hi: num) -> int",
+   "math_random": "fn math_random() -> float",
+   "math_round__1": "fn math_round__1(x: int) -> int",
+   "math_round__2": "fn math_round__2(x: float) -> num",
+   "math_seed": "fn math_seed(n: num) -> float",
+   "math_sin": "fn math_sin(x: num) -> float",
+   "math_sqrt": "fn math_sqrt(x: num) -> float",
+   "math_tan": "fn math_tan(x: num) -> float"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:embrmeta": {
+  "functions": {
+   "meta_get": "fn meta_get(name: str)",
+   "meta_has": "fn meta_has(name: str) -> int",
+   "meta_module": "fn meta_module(name: str) -> map",
+   "meta_module_file": "fn meta_module_file(path: str) -> map",
+   "meta_modules": "fn meta_modules() -> arr",
+   "meta_overload": "fn meta_overload(base: str, fn: fn) -> str",
+   "meta_overloads": "fn meta_overloads(base: str) -> arr",
+   "meta_plugin": "fn meta_plugin(name: str) -> map",
+   "meta_plugins": "fn meta_plugins() -> arr",
+   "meta_set": "fn meta_set(name: str, value) -> float",
+   "meta_undef": "fn meta_undef(name: str) -> int"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:embrtypes": {
+  "functions": {
+   "buffer": "fn buffer(size: num) -> ptr",
+   "buffer_concat": "fn buffer_concat(a: ptr, b: ptr) -> ptr",
+   "buffer_fill": "fn buffer_fill(buf: ptr, v: num)",
+   "buffer_from_str": "fn buffer_from_str(s: str) -> ptr",
+   "buffer_get": "fn buffer_get(buf: ptr, i: num) -> int",
+   "buffer_len": "fn buffer_len(buf: ptr) -> int",
+   "buffer_pack": "fn buffer_pack(desc, values) -> ptr",
+   "buffer_set": "fn buffer_set(buf: ptr, i: num, v: num) -> float",
+   "buffer_slice": "fn buffer_slice(buf: ptr, start: num, end?: num) -> ptr",
+   "buffer_to_str": "fn buffer_to_str(buf: ptr) -> str",
+   "buffer_unpack": "fn buffer_unpack(desc, buf: ptr)",
+   "is_nil": "fn is_nil(v)",
+   "make_false": "fn make_false()",
+   "make_true": "fn make_true()",
+   "struct_type": "fn struct_type(fields: arr)",
+   "type_any": "fn type_any()",
+   "type_arr": "fn type_arr(elem?: ptr)",
+   "type_assert": "fn type_assert(desc, value, msg?: str)",
+   "type_bool": "fn type_bool()",
+   "type_buffer": "fn type_buffer()",
+   "type_check": "fn type_check(desc, value) -> int",
+   "type_f32": "fn type_f32()",
+   "type_f64": "fn type_f64()",
+   "type_float": "fn type_float()",
+   "type_fn": "fn type_fn()",
+   "type_i16": "fn type_i16()",
+   "type_i32": "fn type_i32()",
+   "type_i64": "fn type_i64()",
+   "type_i8": "fn type_i8()",
+   "type_int": "fn type_int()",
+   "type_map": "fn type_map(value?: ptr)",
+   "type_name": "fn type_name(desc) -> str",
+   "type_nil": "fn type_nil()",
+   "type_num": "fn type_num()",
+   "type_of": "fn type_of(value)",
+   "type_ptr": "fn type_ptr(...tags: str)",
+   "type_str": "fn type_str()",
+   "type_u16": "fn type_u16()",
+   "type_u32": "fn type_u32()",
+   "type_u64": "fn type_u64()",
+   "type_u8": "fn type_u8()",
+   "type_union": "fn type_union(alts: arr)"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:encoding": {
+  "functions": {
+   "base64_decode": "fn base64_decode(text: str, urlsafe?) -> str",
+   "base64_encode": "fn base64_encode(data: str, urlsafe?, nopad?) -> str",
+   "crc32": "fn crc32(data: str) -> int",
+   "hex_decode": "fn hex_decode(text: str) -> str",
+   "hex_encode": "fn hex_encode(data: str) -> str",
+   "sha256": "fn sha256(data: str) -> str",
+   "sha256_raw": "fn sha256_raw(data: str) -> str"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:ffi": {
+  "functions": {
+   "ffi_call": "fn ffi_call(sym: ptr, ret, arg_types: arr, args: arr)",
+   "ffi_call_var": "fn ffi_call_var(sym: ptr, ret, arg_types: arr, args: arr, nfixed: num)",
+   "ffi_callback": "fn ffi_callback(fn: fn, ret, arg_types: arr)",
+   "ffi_callback_free": "fn ffi_callback_free(cb: ptr)",
+   "ffi_close": "fn ffi_close(lib: ptr)",
+   "ffi_fn": "fn ffi_fn(address: ptr, name?: str)",
+   "ffi_invoke": "fn ffi_invoke(prepared: ptr, args: arr)",
+   "ffi_open": "fn ffi_open(path: str)",
+   "ffi_prepare": "fn ffi_prepare(sym: ptr, ret, arg_types: arr)",
+   "ffi_prepare_var": "fn ffi_prepare_var(sym: ptr, ret, arg_types: arr, nfixed: num)",
+   "ffi_sym": "fn ffi_sym(lib: ptr, name: str)",
+   "ptr_null": "fn ptr_null()",
+   "ptr_offset": "fn ptr_offset(p: ptr, n?)",
+   "ptr_read": "fn ptr_read(p: ptr, desc)",
+   "ptr_write": "fn ptr_write(p: ptr, desc, val)"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:fs": {
+  "functions": {
+   "fs_basename": "fn fs_basename(path: str) -> str",
+   "fs_dirname": "fn fs_dirname(path: str) -> str",
+   "fs_exists": "fn fs_exists(path: str) -> int",
+   "fs_extname": "fn fs_extname(path: str) -> str",
+   "fs_is_dir": "fn fs_is_dir(path: str) -> int",
+   "fs_join": "fn fs_join(...parts: str) -> str",
+   "fs_list_dir": "fn fs_list_dir(path: str) -> arr<str>",
+   "fs_mkdir": "fn fs_mkdir(path: str, recursive?: num) -> int",
+   "fs_remove": "fn fs_remove(path: str) -> int"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:gc": {
+  "functions": {
+   "gc_collect": "fn gc_collect() -> float",
+   "gc_scope_count": "fn gc_scope_count() -> int"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:http": {
+  "functions": {
+   "http_download": "fn http_download(url: str, path: str, headers?: map, opts?: map) -> map",
+   "http_get": "fn http_get(url: str, headers?: map) -> map",
+   "http_post": "fn http_post(url: str, body: str, headers?: map) -> map",
+   "http_request": "fn http_request(method: str, url: str, headers?: map, body?: str, opts?: map) -> map",
+   "http_sha256": "fn http_sha256(data: str) -> str",
+   "http_tls_available": "fn http_tls_available() -> int",
+   "http_url_encode": "fn http_url_encode(s: str) -> str"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:json": {
+  "functions": {
+   "json_parse": "fn json_parse(text: str, opts?: map)",
+   "json_stringify": "fn json_stringify(value, indent?: num, opts?: map) -> str",
+   "json_valid": "fn json_valid(text: str, opts?: map) -> int"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:os": {
+  "functions": {
+   "os_args": "fn os_args() -> arr<str>",
+   "os_cwd": "fn os_cwd() -> str",
+   "os_environ": "fn os_environ() -> map",
+   "os_exec": "fn os_exec(argv: arr, input?: str)",
+   "os_exit": "fn os_exit(code?: num)",
+   "os_getenv": "fn os_getenv(name: str, default?: str)",
+   "os_has_env": "fn os_has_env(name: str) -> int",
+   "os_pid": "fn os_pid() -> int",
+   "os_platform": "fn os_platform() -> str",
+   "os_setenv": "fn os_setenv(name: str, value: str) -> float",
+   "os_unsetenv": "fn os_unsetenv(name: str) -> float"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:package": {
+  "functions": {
+   "package_dir": "fn package_dir(name: str) -> str",
+   "package_files": "fn package_files(name: str) -> arr<str>",
+   "package_path": "fn package_path(name: str, label: str) -> str"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:parallel": {
+  "functions": {
+   "channel": "fn channel(capacity?: num) -> ptr",
+   "channel_close": "fn channel_close(ch: ptr) -> float",
+   "channel_closed": "fn channel_closed(ch: ptr) -> int",
+   "channel_len": "fn channel_len(ch: ptr) -> int",
+   "channel_recv": "fn channel_recv(ch: ptr)",
+   "channel_send": "fn channel_send(ch: ptr, value) -> float",
+   "channel_try_recv": "fn channel_try_recv(ch: ptr) -> arr",
+   "channel_try_send": "fn channel_try_send(ch: ptr, value) -> int",
+   "shared_table": "fn shared_table() -> ptr",
+   "shared_table_clear": "fn shared_table_clear(t: ptr) -> float",
+   "shared_table_delete": "fn shared_table_delete(t: ptr, key) -> int",
+   "shared_table_get": "fn shared_table_get(t: ptr, key)",
+   "shared_table_has": "fn shared_table_has(t: ptr, key) -> int",
+   "shared_table_items": "fn shared_table_items(t: ptr) -> arr",
+   "shared_table_keys": "fn shared_table_keys(t: ptr) -> arr",
+   "shared_table_len": "fn shared_table_len(t: ptr) -> int",
+   "shared_table_set": "fn shared_table_set(t: ptr, key, value) -> float",
+   "shared_table_update": "fn shared_table_update(t: ptr, key, default, fn: fn)",
+   "shared_table_values": "fn shared_table_values(t: ptr) -> arr",
+   "worker_join": "fn worker_join(w: ptr) -> float",
+   "worker_spawn": "fn worker_spawn(module_path: str, fn_name: str, in_channel: ptr, out_channel: ptr, extra_args?: arr) -> ptr"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:path": {
+  "functions": {
+   "path_basename": "fn path_basename(p: str) -> str",
+   "path_dirname": "fn path_dirname(p: str) -> str",
+   "path_extname": "fn path_extname(p: str) -> str",
+   "path_is_abs": "fn path_is_abs(p: str) -> int",
+   "path_join": "fn path_join(a: str, ...more: str) -> str",
+   "path_normalize": "fn path_normalize(p: str) -> str",
+   "path_relative": "fn path_relative(p: str, base: str) -> str",
+   "path_stem": "fn path_stem(p: str) -> str"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:pmbr": {
+  "functions": {
+   "pmbr_header": "fn pmbr_header(path: str) -> map",
+   "pmbr_meta": "fn pmbr_meta(path: str) -> map",
+   "pmbr_unpack": "fn pmbr_unpack(path: str) -> str"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:random": {
+  "functions": {
+   "rand_bytes": "fn rand_bytes(n: num) -> str",
+   "rand_choice": "fn rand_choice(arr: arr|ptr)",
+   "rand_sample": "fn rand_sample(arr: arr, k: num) -> arr",
+   "rand_seed": "fn rand_seed(n: num) -> float",
+   "rand_shuffle": "fn rand_shuffle(arr: arr) -> arr",
+   "rand_token": "fn rand_token(nbytes?: num) -> str",
+   "rand_uuid4": "fn rand_uuid4() -> str"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:regex": {
+  "functions": {
+   "re_find_all": "fn re_find_all(string: str, pattern: str, flags?: str) -> arr",
+   "re_match": "fn re_match(string: str, pattern: str, flags?: str) -> arr",
+   "re_match_named": "fn re_match_named(string: str, pattern: str, flags?: str) -> map",
+   "re_replace": "fn re_replace(string: str, pattern: str, replacement: str, flags?: str) -> str",
+   "re_test": "fn re_test(string: str, pattern: str, flags?: str) -> int"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:str": {
+  "functions": {
+   "num_fixed": "fn num_fixed(x: num, digits: num) -> str",
+   "str_chr": "fn str_chr(ord: num) -> str",
+   "str_count": "fn str_count(string: str, substring: str) -> int",
+   "str_endswith": "fn str_endswith(string: str, suffix: str) -> int",
+   "str_find": "fn str_find(string: str, substring: str, start_pos?: num) -> int",
+   "str_format": "fn str_format(template: str, ...args) -> str",
+   "str_isalnum": "fn str_isalnum(string: str) -> int",
+   "str_isalpha": "fn str_isalpha(string: str) -> int",
+   "str_isdigit": "fn str_isdigit(string: str) -> int",
+   "str_lower": "fn str_lower(string: str) -> str",
+   "str_ltrim": "fn str_ltrim(string: str) -> str",
+   "str_ord": "fn str_ord(char: str) -> int",
+   "str_pad_left": "fn str_pad_left(string: str, width: num, pad_char?: str) -> str",
+   "str_pad_right": "fn str_pad_right(string: str, width: num, pad_char?: str) -> str",
+   "str_repeat": "fn str_repeat(string: str, count: num) -> str",
+   "str_replace": "fn str_replace(string: str, old: str, new: str) -> str",
+   "str_reverse": "fn str_reverse(string: str) -> str",
+   "str_rtrim": "fn str_rtrim(string: str) -> str",
+   "str_split": "fn str_split(string: str, separator: str) -> arr<str>",
+   "str_startswith": "fn str_startswith(string: str, prefix: str) -> int",
+   "str_strip": "fn str_strip(string: str) -> str",
+   "str_upper": "fn str_upper(string: str) -> str"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:table": {
+  "functions": {
+   "__table_handle_index": "fn __table_handle_index(t: ptr, key)",
+   "__table_handle_iter": "fn __table_handle_iter(t: ptr) -> arr",
+   "__table_handle_setindex": "fn __table_handle_setindex(t: ptr, key, value) -> ptr",
+   "table": "fn table() -> ptr",
+   "table_clear": "fn table_clear(t: ptr) -> float",
+   "table_delete": "fn table_delete(t: ptr, key) -> int",
+   "table_get": "fn table_get(t: ptr, key)",
+   "table_has": "fn table_has(t: ptr, key) -> int",
+   "table_items": "fn table_items(t: ptr) -> arr",
+   "table_keys": "fn table_keys(t: ptr) -> arr",
+   "table_len": "fn table_len(t: ptr) -> int",
+   "table_set": "fn table_set(t: ptr, key, value) -> float",
+   "table_values": "fn table_values(t: ptr) -> arr"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:time": {
+  "functions": {
+   "time_format": "fn time_format(epoch: num, fmt: str, offset?: num) -> str",
+   "time_monotonic": "fn time_monotonic() -> float",
+   "time_now": "fn time_now() -> float",
+   "time_now_ms": "fn time_now_ms() -> int",
+   "time_parse": "fn time_parse(str: str, fmt: str, offset?: num) -> float",
+   "time_sleep": "fn time_sleep(seconds: num) -> float",
+   "time_utc_offset": "fn time_utc_offset(t?: num) -> int"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:unicode": {
+  "functions": {
+   "unicode_chars": "fn unicode_chars(string: str) -> arr<str>",
+   "unicode_chr": "fn unicode_chr(code: num) -> str",
+   "unicode_isalnum": "fn unicode_isalnum(string: str) -> int",
+   "unicode_isalpha": "fn unicode_isalpha(string: str) -> int",
+   "unicode_isdigit": "fn unicode_isdigit(string: str) -> int",
+   "unicode_len": "fn unicode_len(string: str) -> int",
+   "unicode_ord": "fn unicode_ord(char: str) -> int",
+   "unicode_valid": "fn unicode_valid(string: str) -> int"
+  },
+  "version": "1.0.0"
+ },
+ "plugin:vec": {
+  "functions": {
+   "__vec_handle_has": "fn __vec_handle_has(v: ptr, i) -> int",
+   "__vec_handle_index": "fn __vec_handle_index(v: ptr, i: num)",
+   "__vec_handle_iter": "fn __vec_handle_iter(v: ptr) -> arr",
+   "__vec_handle_len": "fn __vec_handle_len(v: ptr) -> int",
+   "__vec_handle_setindex": "fn __vec_handle_setindex(v: ptr, i: num, x) -> ptr",
+   "is_vec": "fn is_vec(x) -> int",
+   "vec": "fn vec() -> ptr",
+   "vec_assign": "fn vec_assign(v: ptr, other: arr|ptr) -> float",
+   "vec_clear": "fn vec_clear(v: ptr) -> float",
+   "vec_copy": "fn vec_copy(v: ptr) -> ptr",
+   "vec_each_do": "fn vec_each_do(v: ptr, fn: fn|ptr)",
+   "vec_extend": "fn vec_extend(v: ptr, other: arr|ptr) -> float",
+   "vec_from": "fn vec_from(arr: arr) -> ptr",
+   "vec_get": "fn vec_get(v: ptr, i: num)",
+   "vec_insert": "fn vec_insert(v: ptr, i: num, x) -> float",
+   "vec_len": "fn vec_len(v: ptr) -> int",
+   "vec_map_do": "fn vec_map_do(v: ptr, fn: fn|ptr) -> float",
+   "vec_pop": "fn vec_pop(v: ptr)",
+   "vec_push": "fn vec_push(v: ptr, x) -> float",
+   "vec_remove": "fn vec_remove(v: ptr, i: num)",
+   "vec_reverse": "fn vec_reverse(v: ptr) -> float",
+   "vec_set": "fn vec_set(v: ptr, i: num, x) -> float",
+   "vec_slice": "fn vec_slice(v: ptr, start: num, end?: num) -> arr",
+   "vec_swap": "fn vec_swap(v: ptr, i: num, j: num) -> float",
+   "vec_to_array": "fn vec_to_array(v: ptr) -> arr"
+  },
+  "version": "1.0.0"
+ }
+}

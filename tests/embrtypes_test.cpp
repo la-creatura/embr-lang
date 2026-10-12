@@ -188,6 +188,22 @@ int main() {
           "end\n",
           "caught\n" },
 
+        { "struct_type: a ptr field is pointer-sized and packs, a nested struct is aligned like C",
+          "T = struct_type([[\"data\", type_ptr()], [\"n\", type_i32()], [\"m\", type_i32()]])\n"
+          "b = buffer_pack(T, {data: ptr_null(), n: 5, m: 6})\n"
+          "print(buffer_len(b))\n"
+          "r = buffer_unpack(T, b)\n"
+          "print(r[\"n\"], r[\"m\"], r[\"data\"])\n"
+          "inner = struct_type([[\"x\", type_f32()], [\"y\", type_f32()]])\n"
+          "outer = struct_type([[\"c\", type_i8()], [\"i\", inner]])\n"
+          "print(buffer_len(buffer_pack(outer, {c: 1, i: {x: 1.5, y: 2.5}})))\n"
+          "try\n"
+          "buffer_pack(T, {data: 5, n: 1, m: 2})\n"
+          "catch e\n"
+          "print(\"a number is not a ptr\")\n"
+          "end\n",
+          "16\n5 6 <ptr 0x0>\n12\na number is not a ptr\n" },
+
         { "buffer: raw byte get/set/slice/concat/str round trip",
           "raw = buffer(2)\n"
           "buffer_set(raw, 0, 65)\n"
@@ -214,6 +230,25 @@ int main() {
           "try\n  buffer_set(b, 0, big)\n  print(\"unreachable\")\ncatch e\n  print(\"value rejected\")\nend\n"
           "buffer_set(b, 1, 300)\nprint(buffer_get(b, 1))\n",
           "size capped\nsize capped 2\nindex rejected\nvalue rejected\n44\n" },
+        { "buffer_pack/buffer_unpack: every integer width at its edge values (size, then value)",
+          "for t in [[type_i8(), -128], [type_i8(), 127], [type_u8(), 255], [type_i16(), -32768], [type_i16(), 32767], [type_u16(), 65535], [type_i32(), -2147483648], [type_u32(), 4294967295], [type_i64(), -9223372036854775807]]\n"
+          "  b = buffer_pack(t[0], t[1])\n"
+          "  print(str(buffer_len(b)) + \" \" + str(buffer_unpack(t[0], b)))\n"
+          "end\n"
+          "print(type_name(type_i8()) + \" \" + type_name(type_u8()) + \" \" + type_name(type_i16()) + \" \" + type_name(type_u16()) + \" \" + type_name(type_u32()) + \" \" + type_name(type_f32()))\n",
+          "1 -128\n1 127\n1 255\n2 -32768\n2 32767\n2 65535\n4 -2147483648\n4 4294967295\n8 -9223372036854775807\ni8 u8 i16 u16 u32 f32\n" },
+        { "buffer_pack: a value that would lose bytes (too big, negative for unsigned, a fraction) raises and names the field",
+          "st = struct_type([[\"a\", type_i8()], [\"b\", type_u16()]])\n"
+          "tries = [fn() return buffer_pack(type_u8(), 300) end, fn() return buffer_pack(type_i8(), 200) end, fn() return buffer_pack(type_u16(), -1) end, fn() return buffer_pack(type_i32(), 1.5) end, fn() return buffer_pack(st, {\"a\": 1, \"b\": 70000}) end, fn() return buffer_pack(type_u8(), \"x\") end]\n"
+          "for t in tries\n"
+          "  try\n"
+          "    t()\n"
+          "    print(\"accepted\")\n"
+          "  catch e\n"
+          "    print(e[\"message\"])\n"
+          "  end\n"
+          "end\n",
+          "value: 300 does not fit in type u8 (0 to 255)\nvalue: 200 does not fit in type i8 (-128 to 127)\nvalue: type u16 is unsigned but got negative value\nvalue: type i32 is integer but got non-integer value 1.500000\nfield 'b': 70000 does not fit in type u16 (0 to 65535)\nvalue: expects u8, got string\n" },
     };
     return embr_test::runSuite("embrtypes plugin test suite", tests, {"embrtypes", "ffi", "embrlib"});
 }

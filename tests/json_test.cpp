@@ -1,4 +1,4 @@
-// unit tests for plugins/json/json.cpp (imported once by main() below)
+// unit tests for plugins/json/json.c (imported once by main() below)
 //
 // json_stringify tests here stick to single-key maps or arrays
 // since map key order comes from an unordered_map and isn't guaranteed
@@ -9,6 +9,11 @@
 int main() {
     using embr_test::Test;
     std::vector<Test> tests = {
+
+        // found by the fuzzer: an empty object key ended in a memcpy with a null buffer (undefined, caught by UBSan)
+        { "json_parse / json_valid: an empty object key, and a document cut right after it",
+          "v = json_parse(\"{\\\"\\\": 1}\")\nprint(v[\"\"])\nprint(json_valid(\"{\\\"\\\"\"))\nprint(json_valid(\"{\\\"\\\": 1}\"))\n",
+          "1\n0\n1\n" },
 
         { "json_parse: array of numbers",
           "v = json_parse(\"[1,2,3]\")\nprint(v[0])\nprint(v[1])\nprint(v[2])\n",
@@ -107,6 +112,35 @@ int main() {
           "print(len(json_stringify(\"\\u00e9\")))\n"
           "print(len(json_stringify([1], 1000000)) < 100)\n",
           "invalid utf-8 rejected\nkey rejected too\n7\n4\n1\n" },
+        { "json: escapes both ways (quotes, backslash, control characters, \\u with upper and lower hex, a surrogate pair)",
+          "print(json_stringify(\"q\\\"b\\\\s/\\n\\r\\t\\x08\\x0c\\x01\"))\n"
+          "v = json_parse(\"\\\"\\\\\\\" \\\\/ \\\\b \\\\f \\\\n \\\\r \\\\t \\\\u00E9 \\\\uD83D\\\\uDE00 \\\\u20ac\\\"\")\n"
+          "print(v == \"\\\" / \\x08 \\x0c \\n \\r \\t é 😀 €\")\n"
+          "print(json_parse(json_stringify(v)) == v)\n",
+          "\"q\\\"b\\\\s/\\n\\r\\t\\b\\f\\u0001\"\n1\n1\n" },
+        { "json_parse: exponents give floats, plain digits give ints",
+          "xs = json_parse(\"[1e3, 2.5E-1, -0.5e+2, 10, -0, 0.5]\")\n"
+          "print(xs[0] == 1000.0)\n"
+          "print(xs[1])\n"
+          "print(xs[2])\n"
+          "print(type(xs[0]))\n"
+          "print(type(xs[3]))\n",
+          "1\n0.25\n-50\nnumber\nint\n" },
+        { "json_parse / json_stringify: each error names what was wrong and where",
+          "for bad in [\"{\\\"a\\\":1 \\\"b\\\":2}\", \"[1 2]\", \"\\\"\\\\uD83D\\\"\", \"\\\"\\\\uD83D\\\\u0041\\\"\", \"\\\"\\\\q\\\"\", \"\\\"\\\\uZZZZ\\\"\", \"01\", \"-01\", \"1.\", \"1e\", \"{\\\"a\\\"}\"]\n"
+          "  try\n"
+          "    json_parse(bad)\n"
+          "    print(\"accepted \" + bad)\n"
+          "  catch e\n"
+          "    print(e[\"message\"])\n"
+          "  end\n"
+          "end\n"
+          "try\n"
+          "  json_stringify([print])\n"
+          "catch e\n"
+          "  print(e[\"message\"])\n"
+          "end\n",
+          "expected ',' or '}' in object at line 1, column 8 (position 7)\nexpected ',' or ']' in array at line 1, column 4 (position 3)\nunpaired high surrogate in \\u escape at line 1, column 8 (position 7)\nhigh surrogate not followed by a low surrogate at line 1, column 14 (position 13)\ninvalid escape '\\q' at line 1, column 4 (position 3)\ninvalid hex digit in \\u escape at line 1, column 5 (position 4)\ninvalid number (no leading zeros in JSON) at line 1, column 1 (position 0)\ninvalid number (no leading zeros in JSON) at line 1, column 2 (position 1)\ninvalid number (digits must follow '.') at line 1, column 3 (position 2)\ninvalid number exponent at line 1, column 3 (position 2)\nexpected ':' after object key at line 1, column 5 (position 4)\ncannot serialize a function value to JSON\n" },
     };
     return embr_test::runSuite("json plugin test suite", tests, {"embrlib", "json"});
 }

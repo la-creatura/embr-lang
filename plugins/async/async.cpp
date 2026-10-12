@@ -19,6 +19,7 @@
 // good to know
 //   - async_spawn() doesn't start a thread per call. it pushes a task onto a pool of worker threads (started on
 //     the first call, size set beforehand with async_pool_size()) and returns a promise at once
+//   - the queue holds at most 10000 waiting tasks (async_queue_limit()): a spawner that gets ahead of the workers waits
 //   - a task is (module_path, fn_name, arg) plus the spawning script's own scriptDir. the pool thread resolves
 //     module_path relative to that scriptDir, like `import` would from that script
 //   - each pool thread caches an Interpreter and resolved functions per (scriptDir, module_path) (WorkerModule
@@ -68,7 +69,7 @@ static bool isCrossThreadSafe(const Value& v) {
     return false;
 }
 
-static void requireCrossThreadSafe(const std::string& fn, const Value& v) {
+static void requireCrossThreadSafe(const char* fn, const Value& v) {
     if (!isCrossThreadSafe(v))
         throwError(fn, "value is not safe to share across threads (must be plain data -- "
                         "numbers/strings/arrays/maps -- or a parallel.shared_table handle): got " +
@@ -78,7 +79,7 @@ static void requireCrossThreadSafe(const std::string& fn, const Value& v) {
 // {"ok": 1, "value": result}
 static Value okResult(Value result) {
     Value::map_type m;
-    m["ok"]    = Value(1.0);
+    m["ok"]    = Value((int64_t)1);
     m["value"] = std::move(result);
     return Value(std::move(m));
 }
@@ -86,7 +87,7 @@ static Value okResult(Value result) {
 // {"ok": 0, "error": {message, kind, line}}
 static Value errResult(const EmbrError& e) {
     Value::map_type m;
-    m["ok"]    = Value(0.0);
+    m["ok"]    = Value((int64_t)0);
     m["error"] = errorToMap(e);
     return Value(std::move(m));
 }
@@ -112,6 +113,10 @@ struct Task {
     Value arg;
     std::shared_ptr<Promise> promise;
     PluginPolicy policy;    // the spawning script's sandbox policy, applied to the worker's Interpreter
+    Interpreter::BackendHooks backend;   // the spawning interpreter's way into script code, for the worker's own interpreter
+    Interpreter::Budget budget;   // the spawning script's step/time limit, so a worker can't run past it
+    std::string cacheDir;   // the spawning script's compiled-file cache folder, also used by the worker
+    std::map<std::string, Interpreter::PackageRecord> packages;   // packages the spawning script imported, so package_path() works in the worker
 };
 
 // one module's worth of a pool thread's state: its own private Interpreter (scriptDir set once, from the first
@@ -132,7 +137,9 @@ static thread_local bool tlsInWorker = false;
 struct Pool {
     std::mutex              mu;
     std::condition_variable cv;
+    std::condition_variable space;     // a task was taken off the queue, so a spawner waiting on a full queue can go on
     std::deque<Task>        tasks;
+    size_t                  maxQueued = 10000;   // async_queue_limit(). 0 = no limit
     std::vector<std::thread> threads;
     std::atomic<bool>       stopping{false};
     std::atomic<bool>       started{false};
@@ -165,6 +172,7 @@ struct Pool {
                 task = std::move(tasks.front());
                 tasks.pop_front();
             }
+            space.notify_one();
 
             Value out;
             try {
@@ -179,10 +187,14 @@ struct Pool {
                 if (mit == modules.end()) {
                     auto wm = std::make_unique<WorkerModule>();
                     wm->interp.scriptDir = task.scriptDir;
+                    wm->interp.backend = task.backend;
                     wm->interp.pluginPolicy = task.policy;
+                    wm->interp.cacheDir = task.cacheDir;
+                    wm->interp.packages = task.packages;
                     mit = modules.emplace(std::move(key), std::move(wm)).first;
                 }
                 WorkerModule& wm = *mit->second;
+                wm.interp.setBudget(task.budget);
 
                 auto it = wm.fns.find(task.fnName);
                 Value fn;
@@ -201,6 +213,7 @@ struct Pool {
                 out = errResult(e);
             }
 
+            out.markShared();   // the thread that awaits it will hold it
             {
                 std::lock_guard<std::mutex> lock(task.promise->mu);
                 task.promise->result = std::move(out);
@@ -217,6 +230,7 @@ struct Pool {
             stopping = true;
         }
         cv.notify_all();
+        space.notify_all();
         for (auto& t : threads) if (t.joinable()) t.join();
         threads.clear();
         stopping = false;
@@ -272,16 +286,38 @@ EMBR_PLUGIN {
     interp->bindSig("async_spawn", {pStr("module_path"), pStr("fn_name"), pAny("arg")},
     [interp](const std::vector<Value>& args) -> Value {
         requireCrossThreadSafe("async_spawn", args[2]);
+        args[2].markShared();   // a pool thread will hold it
         pool().ensureStarted();
 
         auto promise = std::make_shared<Promise>();
         {
-            std::lock_guard<std::mutex> lock(pool().mu);
-            pool().tasks.push_back(Task{interp->scriptDir, args[0].asString(), args[1].asString(), args[2], promise, interp->pluginPolicy});
+            std::unique_lock<std::mutex> lock(pool().mu);
+            // a full queue slows the spawner down instead of growing without limit. a pool thread must not wait here
+            // (every thread could end up waiting for room that only a thread can make), so for it a full queue is an error
+            if (pool().maxQueued > 0 && pool().tasks.size() >= pool().maxQueued) {
+                if (tlsInWorker)
+                    throwError("async_spawn", "the task queue is full (" + std::to_string(pool().maxQueued) + " waiting)");
+                pool().space.wait(lock, [] { return pool().stopping.load() || pool().tasks.size() < pool().maxQueued; });
+            }
+            pool().tasks.push_back(Task{interp->scriptDir, args[0].asString(), args[1].asString(), args[2], promise, interp->pluginPolicy, interp->backend, interp->budget, interp->cacheDir, interp->packages});
         }
         pool().cv.notify_one();
 
         return Value(TypedPtr(promise.get(), "async.promise", promise));
+    });
+
+    // async_queue_limit(n?) -> int
+    // how many tasks may wait for a free pool thread. async_spawn() waits when the queue is full (on a pool thread
+    // it raises instead). with n it sets the limit (0 = no limit, default 10000), always returns the limit
+    interp->bindSig("async_queue_limit", {Param::opt("n", TS::Num)},
+    [](const std::vector<Value>& args) -> Value {
+        if (!args.empty()) {
+            int64_t n = numToInt64(args[0], "async_queue_limit", "n");
+            if (n < 0) throwError("async_queue_limit", "n must be >= 0");
+            { std::lock_guard<std::mutex> lock(pool().mu); pool().maxQueued = (size_t)n; }
+            pool().space.notify_all();
+        }
+        return Value((int64_t)pool().maxQueued);
     });
 
     // async_await(p) -> {"ok":1,"value":...} or {"ok":0,"error":{message,kind,line}}
@@ -304,10 +340,10 @@ EMBR_PLUGIN {
         std::lock_guard<std::mutex> lock(p->mu);
         Value::map_type m;
         if (!p->ready) {
-            m["ready"] = Value(0.0);
+            m["ready"] = Value((int64_t)0);
             return Value(std::move(m));
         }
-        m["ready"] = Value(1.0);
+        m["ready"] = Value((int64_t)1);
         for (auto& kv : p->result.asMap()) m[kv.first] = kv.second;
         return Value(std::move(m));
     });
@@ -328,4 +364,19 @@ EMBR_PLUGIN {
         }
         return Value(std::move(out));
     });
+
+    // what each always returns (see Value::Callable::returns)
+    interp->setResultTypes({
+        {"async_pool_size", TS::Float}, {"async_spawn", TS::Ptr}, {"async_queue_limit", TS::Int}, {"async_await", TS::Map},
+        {"async_try_await", TS::Map}, {"async_all", TS::Arr},
+    });
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("async", "1.0.0", "future/promise layer over a shared thread pool", EMBR_CAP_THREADS, EMBR_CAP_NONE,
+    {"async_all", "waits for all, results in input order. does not stop at the first failure (every task is already running and can't be cancelled), so it behaves like Promise.allSettled, not fail-fast"},
+    {"async_await", "blocks until resolved; safe to call more than once"},
+    {"async_pool_size", "must be called before the pool has started (i.e. before the first async_spawn); raises otherwise"},
+    {"async_queue_limit", "how many tasks may wait for a free pool thread, default 10000, 0 for no limit. async_spawn waits when the queue is full, so a loop that spawns faster than the workers finish slows down instead of using more and more memory. on a pool thread (a task that spawns tasks) it raises instead of waiting, so the pool cannot jam itself. with n it sets the limit; it always returns the limit"},
+    {"async_spawn", "returns a promise handle immediately, does not block; arg must be cross-thread-safe (same rule as parallel)"},
+    {"async_try_await", "non-blocking poll"});

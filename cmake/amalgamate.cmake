@@ -40,6 +40,12 @@ function(embr_amalgamate name)
     file(GLOB_RECURSE ARG_DEPS CONFIGURE_DEPENDS
         "${ARG_SOURCE_DIR}/*.h" "${ARG_SOURCE_DIR}/*.hpp" "${ARG_SOURCE_DIR}/*.inl")
 
+    # headers that sit directly in an include dir (include/embr_plugin.h) are pulled in by the script too
+    foreach(dir ${ARG_INCLUDE_DIRS})
+        file(GLOB top_headers CONFIGURE_DEPENDS "${dir}/*.h")
+        list(APPEND ARG_DEPS ${top_headers})
+    endforeach()
+
     set(SCRIPT "${CMAKE_SOURCE_DIR}/tools/amalgamate.py")
 
     set(CMD ${Python3_EXECUTABLE} "${SCRIPT}" "${ARG_ENTRY}" -o "${ARG_OUTPUT}")

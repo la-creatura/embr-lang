@@ -35,6 +35,28 @@ while IFS= read -r f; do
 done < <(find "$root/examples" "$root/modules" "$root/tests" "$root/tools" -name '*.embr' -not -path '*/test-work/*')
 (( n > 5 )) || bad "found only $n .embr files"
 
+# element types are written together, and a comparison with a variable called arr is not one
+printf 'local arr< int >xs=[]\nfn f(a:arr<int>,b : map<arr<str>>)->arr<arr<str>>\nreturn [[\"a\"]]\nend\narr=3\nif arr<4 and arr<5\nprint(1)\nend\n' > "$work/types.embr"
+"$embr" fmt --stdout "$work/types.embr" > "$work/types.out" 2>"$work/err" || bad "types.embr did not format: $(cat "$work/err")"
+grep -q '^fn f(a: arr<int>, b: map<arr<str>>) -> arr<arr<str>>$' "$work/types.out" || bad "element types are written together: $(cat "$work/types.out")"
+grep -q '^if arr < 4 and arr < 5$' "$work/types.out" || bad "a comparison with a variable called arr: $(cat "$work/types.out")"
+"$embr" fmt --stdout "$work/types.out" > "$work/types2.out" 2>/dev/null
+cmp -s "$work/types.out" "$work/types2.out" || bad "element types: not idempotent"
+
+# const and const fn keep their keyword
+printf 'const   N=5*2\nconst   fn  cl( v,lo )\nif v<lo\nreturn lo\nend\nreturn v\nend\n' > "$work/const.embr"
+"$embr" fmt --stdout "$work/const.embr" > "$work/const.out" 2>"$work/err" || bad "const did not format: $(cat "$work/err")"
+grep -q '^const N = 5 \* 2$' "$work/const.out" && grep -q '^const fn cl(v, lo)$' "$work/const.out" || bad "const formatting: $(cat "$work/const.out")"
+"$embr" fmt --stdout "$work/const.out" > "$work/const2.out" 2>/dev/null
+cmp -s "$work/const.out" "$work/const2.out" || bad "const: not idempotent"
+
+# tokens that only look like one operator when written close together keep their space (`! =` must not become `!=`)
+for src in '! =' '! ==' '- >' '- =' 'x = - >= y'; do
+    printf '%s\n' "$src" > "$work/glue.embr"
+    "$embr" fmt --stdout "$work/glue.embr" > "$work/glue.out" 2>/dev/null
+    [[ "$(cat "$work/glue.out")" == "$src" ]] || bad "formatting '$src' changed its tokens: $(cat "$work/glue.out")"
+done
+
 # a file that doesn't lex is an error and stays as it was
 printf 'x = "unterminated\n' > "$work/bad.embr"; cp "$work/bad.embr" "$work/bad.orig"
 "$embr" fmt "$work/bad.embr" >/dev/null 2>&1; [[ $? -eq 2 ]] || bad "unlexable file should exit 2"

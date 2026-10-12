@@ -1,0 +1,14 @@
+42
+a-b-c
+x,y
+7
+7 49
+["a", "b", "c"]
+["int", "number", "string", "array", "map"]
+1
+HéLLO WöRLD
+[1, "a", 2.5, {k: 2}]
+2.5 -7 txt
+caught: nope
+caught: hc_join: every element must be a string
+caught a wrong handle

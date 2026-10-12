@@ -2,7 +2,7 @@
 // threads for embr, the "isolated" way: every worker thread gets its own private Interpreter, and the only things
 // that cross threads are channel messages and shared_table handles, each with its own lock
 //
-// this does not make an existing Interpreter/Runner/VmRunner safe to use from several threads. workers are
+// this does not make an existing Interpreter/VmRunner safe to use from several threads. workers are
 // separate (see workerLoop() below), like separate `embr` processes
 //
 // usage (raw primitives)
@@ -20,6 +20,7 @@
 //   results = worker_map("worker.embr", "process", [1,2,3,4], 4)
 //
 // good to know
+//   - channel() has no limit. channel(n) holds n values, and channel_send then waits for room (channel_try_send does not wait)
 //   - what can go in a channel or a shared_table value: plain data (numbers, strings, arrays/maps of the same) or
 //     another shared_table handle. NOT a plain table() handle, an ffi handle or a closure: none are locked
 //     (table.cpp's Table isn't, and the VM can write a closure's captured frame in place, see vm.h resolveStore),
@@ -68,7 +69,7 @@ static bool isCrossThreadSafe(const Value& v) {
     return false;
 }
 
-static void requireCrossThreadSafe(const std::string& fn, const Value& v) {
+static void requireCrossThreadSafe(const char* fn, const Value& v) {
     if (!isCrossThreadSafe(v))
         throwError(fn, "value is not safe to share across threads (must be plain data -- "
                         "numbers/strings/arrays/maps -- or a shared_table handle): got " +
@@ -84,6 +85,7 @@ struct Channel {
     bool                    closed   = false;
 
     void send(Value v) {
+        v.markShared();   // the receiving thread will hold it
         std::unique_lock<std::mutex> lock(mu);
         if (capacity > 0)
             cv.wait(lock, [&] { return queue.size() < capacity || closed; });
@@ -91,6 +93,18 @@ struct Channel {
         queue.push_back(std::move(v));
         lock.unlock();
         cv.notify_all();
+    }
+
+    // like send() but never waits: false if a bounded channel is full right now
+    bool trySend(Value v) {
+        v.markShared();
+        std::unique_lock<std::mutex> lock(mu);
+        if (closed) throwError("channel_try_send", "cannot send on a closed channel");
+        if (capacity > 0 && queue.size() >= capacity) return false;
+        queue.push_back(std::move(v));
+        lock.unlock();
+        cv.notify_all();
+        return true;
     }
 
     // blocks until an item is available or the channel is closed and
@@ -146,7 +160,7 @@ static SharedTable* requireSharedTable(const Value& v) {
 // {"ok": 1, "value": result}
 static Value okResult(Value result) {
     Value::map_type m;
-    m["ok"]    = Value(1.0);
+    m["ok"]    = Value((int64_t)1);
     m["value"] = std::move(result);
     return Value(std::move(m));
 }
@@ -154,7 +168,7 @@ static Value okResult(Value result) {
 // {"ok": 0, "error": {message, kind, line}}
 static Value errResult(const EmbrError& e) {
     Value::map_type m;
-    m["ok"]    = Value(0.0);
+    m["ok"]    = Value((int64_t)0);
     m["error"] = errorToMap(e);
     return Value(std::move(m));
 }
@@ -164,10 +178,15 @@ static Value errResult(const EmbrError& e) {
 // calls fnName(task, ...extraArgs) and pushes the wrapped result to outCh until inCh is closed and drained
 static void workerLoop(std::string scriptDir, std::string modulePath, std::string fnName,
                        std::shared_ptr<Channel> inCh, std::shared_ptr<Channel> outCh,
-                       std::vector<Value> extraArgs, PluginPolicy policy)
+                       std::vector<Value> extraArgs, PluginPolicy policy, Interpreter::Budget budget, Interpreter::BackendHooks backend, std::string cacheDir,
+                       std::map<std::string, Interpreter::PackageRecord> packages)
 {
     Interpreter workerInterp;
     workerInterp.scriptDir = scriptDir;
+    workerInterp.backend = backend;   // the same way into script code as the spawning interpreter has
+    workerInterp.setBudget(budget);   // the spawning script's step/time limit applies to the worker too
+    workerInterp.cacheDir = std::move(cacheDir);   // the worker's modules use the same compiled-file cache
+    workerInterp.packages = std::move(packages);   // so package_path() works in a worker for a package the parent imported
     // the spawning script's sandbox policy applies to the worker too: a fresh Interpreter defaults to
     // unrestricted, so without this a sandboxed script could `import "os"` from inside a worker
     workerInterp.pluginPolicy = std::move(policy);
@@ -226,6 +245,15 @@ EMBR_PLUGIN {
         return Value(0.0);
     });
 
+    // channel_try_send(ch, value) -> 1 or 0
+    // for a channel with a capacity: 0 (and the value is not sent) when it is full right now, so a producer can
+    // slow down or drop work instead of waiting. an unbounded channel always takes it
+    interp->bindSig("channel_try_send", {pPtr("ch"), pAny("value")},
+    [](const std::vector<Value>& args) -> Value {
+        requireCrossThreadSafe("channel_try_send", args[1]);
+        return Value(requireChannel(args[0])->trySend(args[1]) ? (int64_t)1 : (int64_t)0);
+    });
+
     // channel_recv(ch) -> any
     // blocks until a value is available; raises "channel closed" once the
     // channel is closed and empty rather than returning a sentinel, use
@@ -243,7 +271,7 @@ EMBR_PLUGIN {
     [](const std::vector<Value>& args) -> Value {
         auto [found, v] = requireChannel(args[0])->tryRecv();
         Value::array_type out;
-        out.push_back(Value(found ? 1.0 : 0.0));
+        out.push_back(Value(found ? (int64_t)1 : (int64_t)0));
         out.push_back(std::move(v));
         return Value(std::move(out));
     });
@@ -260,12 +288,12 @@ EMBR_PLUGIN {
 
     interp->bindSig("channel_len", {pPtr("ch")},
     [](const std::vector<Value>& args) -> Value {
-        return Value((double)requireChannel(args[0])->size());
+        return Value((int64_t)requireChannel(args[0])->size());
     });
 
     interp->bindSig("channel_closed", {pPtr("ch")},
     [](const std::vector<Value>& args) -> Value {
-        return Value(requireChannel(args[0])->isClosed() ? 1.0 : 0.0);
+        return Value(requireChannel(args[0])->isClosed() ? (int64_t)1 : (int64_t)0);
     });
 
     // worker_spawn(module_path, fn_name, in_channel, out_channel, extra_args?: arr) -> ptr<parallel.worker>
@@ -282,13 +310,14 @@ EMBR_PLUGIN {
     interp->bindSig("worker_spawn",
         {pStr("module_path"), pStr("fn_name"), pPtr("in_channel"), pPtr("out_channel"), pOpt("extra_args", TS::Arr)},
     [interp](const std::vector<Value>& args) -> Value {
-        auto inCh  = std::static_pointer_cast<Channel>(args[2].asPointer("parallel.channel").owner);
-        auto outCh = std::static_pointer_cast<Channel>(args[3].asPointer("parallel.channel").owner);
+        auto inCh  = std::static_pointer_cast<Channel>(args[2].asPointer("parallel.channel").owner());
+        auto outCh = std::static_pointer_cast<Channel>(args[3].asPointer("parallel.channel").owner());
         std::vector<Value> extraArgs = args.size() >= 5 ? args[4].asArray() : std::vector<Value>{};
+        for (const Value& a : extraArgs) a.markShared();   // the worker thread will hold them
 
         auto w = std::make_shared<Worker>();
         w->th = std::thread(workerLoop, interp->scriptDir, args[0].asString(), args[1].asString(),
-                            inCh, outCh, std::move(extraArgs), interp->pluginPolicy);
+                            inCh, outCh, std::move(extraArgs), interp->pluginPolicy, interp->budget, interp->backend, interp->cacheDir, interp->packages);
         return Value(TypedPtr(w.get(), "parallel.worker", w));
     });
 
@@ -315,6 +344,7 @@ EMBR_PLUGIN {
         requireCrossThreadSafe("shared_table_set", args[2]);
         auto* t = requireSharedTable(args[0]);
         TableKey k = makeKey("shared_table_set", args[1]);
+        args[1].markShared(); args[2].markShared();   // other threads read the table
         std::lock_guard<std::recursive_mutex> lock(t->mu);
         t->data[k] = {args[1], args[2]};
         return Value(0.0);
@@ -336,7 +366,7 @@ EMBR_PLUGIN {
         auto* t = requireSharedTable(args[0]);
         TableKey k = makeKey("shared_table_has", args[1]);
         std::lock_guard<std::recursive_mutex> lock(t->mu);
-        return Value(t->data.count(k) ? 1.0 : 0.0);
+        return Value(t->data.count(k) ? (int64_t)1 : (int64_t)0);
     });
 
     interp->bindSig("shared_table_delete", {pPtr("t"), pAny("key")},
@@ -344,14 +374,14 @@ EMBR_PLUGIN {
         auto* t = requireSharedTable(args[0]);
         TableKey k = makeKey("shared_table_delete", args[1]);
         std::lock_guard<std::recursive_mutex> lock(t->mu);
-        return Value(t->data.erase(k) > 0 ? 1.0 : 0.0);
+        return Value(t->data.erase(k) > 0 ? (int64_t)1 : (int64_t)0);
     });
 
     interp->bindSig("shared_table_len", {pPtr("t")},
     [](const std::vector<Value>& args) -> Value {
         auto* t = requireSharedTable(args[0]);
         std::lock_guard<std::recursive_mutex> lock(t->mu);
-        return Value((double)t->data.size());
+        return Value((int64_t)t->data.size());
     });
 
     interp->bindSig("shared_table_clear", {pPtr("t")},
@@ -412,7 +442,40 @@ EMBR_PLUGIN {
         Value cur = (it != t->data.end()) ? it->second.second : args[2];
         Value updated = embr::invoke(*interp, args[3], {cur});
         requireCrossThreadSafe("shared_table_update", updated);
+        args[1].markShared(); updated.markShared();
         t->data[k] = {args[1], updated};
         return updated;
     });
+
+    // what each always returns (see Value::Callable::returns)
+    interp->setResultTypes({
+        {"channel", TS::Ptr}, {"channel_send", TS::Float}, {"channel_try_send", TS::Int}, {"channel_try_recv", TS::Arr}, {"channel_close", TS::Float},
+        {"channel_len", TS::Int}, {"channel_closed", TS::Int}, {"worker_spawn", TS::Ptr}, {"worker_join", TS::Float}, {"shared_table", TS::Ptr},
+        {"shared_table_set", TS::Float}, {"shared_table_has", TS::Int}, {"shared_table_delete", TS::Int}, {"shared_table_len", TS::Int},
+        {"shared_table_clear", TS::Float}, {"shared_table_keys", TS::Arr}, {"shared_table_values", TS::Arr}, {"shared_table_items", TS::Arr},
+    });
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("parallel", "1.0.0", "isolated-interpreter-per-thread concurrency", EMBR_CAP_THREADS, EMBR_CAP_NONE,
+    {"channel", "0/omitted = unbounded; otherwise channel_send blocks once that many items are queued"},
+    {"channel_close", "wakes any blocked recv/send"},
+    {"channel_closed", "1 if the channel has been closed, else 0"},
+    {"channel_len", "how many values are waiting in the channel"},
+    {"channel_recv", "blocks; raises \"channel closed\" once closed and drained"},
+    {"channel_send", "sends value to the channel, waiting for room if the channel is full. raises if the value is not safe to share across threads (plain data or a shared_table handle)"},
+    {"channel_try_recv", "non-blocking"},
+    {"channel_try_send", "non-blocking. gives 0 (and sends nothing) when a channel made with a capacity is full right now. channel() has no limit; channel(n) holds n values and channel_send waits for room, so use a capacity when a fast producer feeds a slow worker"},
+    {"shared_table", "like table() but locked (std::recursive_mutex): the one container this plugin treats as safe to share across workers on purpose"},
+    {"shared_table_clear", "removes every entry"},
+    {"shared_table_delete", "removes key if it is there; 1 if something was removed, else 0"},
+    {"shared_table_get", "the value stored under key. raises if there is none"},
+    {"shared_table_has", "1 if key is in the table, else 0"},
+    {"shared_table_items", "an array of [key, value] pairs"},
+    {"shared_table_keys", "an array of the keys"},
+    {"shared_table_len", "the number of entries"},
+    {"shared_table_set", "same semantics as table's equivalents, lock-guarded"},
+    {"shared_table_update", "atomic read-modify-write: cur = t[key] if present else default, then stores and returns fn(cur), all under one lock. the safe way to build a counter or accumulator (a get + set pair from script would race)"},
+    {"shared_table_values", "an array of the values"},
+    {"worker_join", "blocks until the thread has exited; safe to call more than once"},
+    {"worker_spawn", "starts a thread with its own private Interpreter; loads module_path exactly like import (resolved relative to the *spawning* script's directory); loops recv → fn_name(task, ...extra_args) → send(wrapped result) until in_channel closes"});

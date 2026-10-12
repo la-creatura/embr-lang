@@ -1,0 +1,21 @@
+# overload groups written in the script: calls with known types are compiled as calls of the member, the ones
+# with mixed array elements go through the dispatcher. 200k turns
+fn size__1(n: int) -> int
+    return n * 2
+end
+fn size__2(s: str) -> int
+    return len(s)
+end
+fn size__3(x: float) -> int
+    return 1
+end
+import "embrlib"
+mixed = [5, "abc", 2.5, 7]
+acc = 0
+i = 0
+while i < 200000
+    acc = acc + size(i % 10) + size("ab")
+    acc = acc + size(mixed[i % 4])
+    i = i + 1
+end
+print(acc)

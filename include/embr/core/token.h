@@ -17,10 +17,10 @@ enum class TokenType {
     Equal,  EqualEqual,
     Greater, Less, GreaterEqual, LessEqual,
     Bang, BangEqual,
-    Amp,
+    Amp, Pipe, Caret, Tilde, LShift,
     LArrow, RArrow,
     And, Or,
-    If, Elif, Else, End, Fn, Return, While, For, In, Break, Continue, Import, Local, Auto,
+    If, Elif, Else, End, Fn, Return, While, For, In, Break, Continue, Import, Local, Const,
     Try, Catch,
     Eof
 };

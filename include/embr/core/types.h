@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <memory>
 
 namespace embr {
 
@@ -84,6 +85,12 @@ namespace TS {
     inline constexpr TypeSet Any   = TypeSet(0xFF);
 }
 
+// the type of what a container holds, when it is written or worked out (`arr<int>`, `map<str>`, `arr<arr<float>>`). `el` is null when it is not known.
+// only the static checker (typecheck.h) looks at it: at run time an array is an array
+struct TypeAnn;
+using TypeElem = std::shared_ptr<const TypeAnn>;
+struct TypeAnn { TypeSet t = TypeSet::Any(); TypeElem el; };
+
 struct Param {
     std::string name;
     TypeSet     type     = TS::Any;
@@ -92,6 +99,12 @@ struct Param {
     // a native parameter the function changes where the caller keeps it. the call site must pass `&name`
     // (see "in-out parameters" on the wiki architecture page). only natives can have one
     bool        inout    = false;
+    // the type was written in the source (`a: any` counts, an omitted type does not). the static checker uses it
+    bool        explicitType = false;
+    // the type of the elements, for an `arr<int>` parameter. for a variadic one the written type is the type of each argument, so this stays null
+    TypeElem    elem = nullptr;
+    // a native: this argument has to fit what the array (or map) passed as argument number `elemOf` holds. `push(&list, x)` is req/io list, then x with elemOf 0
+    int         elemOf = -1;
 
     static Param req (std::string nm, TypeSet t = TypeSet::Any()) { return {std::move(nm), t, false, false}; }
     static Param opt (std::string nm, TypeSet t = TypeSet::Any()) { return {std::move(nm), t, true,  false}; }

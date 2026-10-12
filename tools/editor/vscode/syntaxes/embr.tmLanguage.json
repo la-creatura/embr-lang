@@ -77,8 +77,8 @@
           }
         },
         {
-          "comment": "local int x = 5  /  local auto x = 5",
-          "match": "\\b(local)\\s+(int|num|str|arr|map|fn|ptr|any|auto)\\b",
+          "comment": "local int x = 5",
+          "match": "\\b(local)\\s+(int|num|str|arr|map|fn|ptr|any)\\b",
           "captures": {
             "1": { "name": "storage.modifier.embr" },
             "2": { "name": "support.type.embr" }
@@ -93,7 +93,7 @@
         { "name": "keyword.control.flow.embr",        "match": "\\b(return|try|catch|end)\\b" },
         { "name": "keyword.control.import.embr",      "match": "\\bimport\\b" },
         { "name": "storage.type.function.embr",       "match": "\\bfn\\b" },
-        { "name": "storage.modifier.embr",            "match": "\\b(local|auto)\\b" },
+        { "name": "storage.modifier.embr",            "match": "\\b(local|const)\\b" },
         { "name": "keyword.operator.logical.embr",    "match": "\\b(and|or)\\b" }
       ]
     },
@@ -109,6 +109,7 @@
     "operators": {
       "patterns": [
         { "name": "keyword.operator.assignment.compound.embr", "match": "\\+=|-=|\\*=|/=" },
+        { "name": "keyword.operator.bitwise.embr",             "match": "<<|[|^~]" },
         { "name": "keyword.operator.comparison.embr",          "match": "==|!=|<=|>=|<|>" },
         { "name": "keyword.operator.spread.embr",              "match": "\\.\\.\\." },
         { "name": "invalid.illegal.range.embr",                "match": "(?<!\\.)\\.\\.(?!\\.)" },

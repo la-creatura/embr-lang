@@ -1,0 +1,14 @@
+# native overload groups picked while the script runs: the arguments are `num` (an int or a float, `i - k` can
+# overflow into a float) or array elements of mixed type, so each call goes through the group's dispatcher. 200k turns
+import "embrlib"
+import "embrmath"
+vals = [3, -2.5, -7, 4.25]
+acc = 0.0
+local num v = 0
+i = 0
+while i < 200000
+    v = vals[i % 4]
+    acc = acc + math_abs(v) + math_min(v, 1) + math_abs(i - 100000)
+    i = i + 1
+end
+print(acc)

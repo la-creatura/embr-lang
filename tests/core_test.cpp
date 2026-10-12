@@ -19,7 +19,7 @@ int main() {
         // top-level variables are looked up once and remembered by the VM (see CompiledChunk::GlobalCache), so
         // anything that changes the scopes in between has to be noticed
         { "globals: lookups stay right when names, types and scopes change",
-          "import \"embrlib\"\n"
+          "fn lh(v) return v end import \"embrlib\"\n"
           "gl_x = 1\n"
           "fn gl_getx()\n"
           "    return gl_x\n"
@@ -47,7 +47,7 @@ int main() {
           "end\n"
           "print(gl_n)\n"
           "try\n"
-          "    gl_n = \"oops\"\n"
+          "    gl_n = lh(\"oops\")\n"
           "catch e\n"
           "    print(\"type error caught\")\n"
           "end\n"
@@ -128,13 +128,13 @@ int main() {
           "    return t\n"
           "end\n"
           "print(f())\n"
-          "a = 1\n"
+          "a = 1.0\n"
           "a = a + 2\n"
           "a = a + 0.5\n"
           "print(a)\n"
           "b = 2\n"
-          "b = b + \"z\"\n"
-          "print(b)\n",
+          "bz = b + \"z\"\n"
+          "print(bz)\n",
           "ab5ab5\nxy[1, 2]\n3.5\n2z\n" },
 
         { "string: s = s + x copies are independent",
@@ -347,7 +347,7 @@ int main() {
           "21\n" },
 
         { "compound: /=",
-          "x = 20\nx /= 4\nprint(x)\n",
+          "x = 20.0\nx /= 4\nprint(x)\n",
           "5\n" },
 
         { "compound: loop counter",
@@ -429,8 +429,8 @@ int main() {
 
 
         { "annotation: param type enforced, must be caught explicitly",
-          "double(x: num) -> num = x * 2\n"
-          "try\ndouble(\"bad\")\nprint(\"unreachable\")\ncatch e\nprint(\"caught\")\nend\nprint(\"ok\")\n",
+          "fn lh(v) return v end double(x: num) -> num = x * 2\n"
+          "try\ndouble(lh(\"bad\"))\nprint(\"unreachable\")\ncatch e\nprint(\"caught\")\nend\nprint(\"ok\")\n",
           "caught\nok\n" },
 
         { "annotation: correct types pass through",
@@ -438,7 +438,7 @@ int main() {
           "hi world\n" },
 
         { "annotation: return type mismatch raises, must be caught explicitly",
-          "fn bad() -> num\nreturn \"oops\"\nend\n"
+          "fn lh(v) return v end fn bad() -> num\nreturn lh(\"oops\")\nend\n"
           "try\nbad()\nprint(\"unreachable\")\ncatch e\nprint(\"caught\")\nend\nprint(\"ok\")\n",
           "caught\nok\n" },
 
@@ -529,7 +529,7 @@ int main() {
 
         // real upvalue semantics: two closures made in the same enclosing call share the live scope layer they closed over
         // (CaptureFrame in core/value.h), so a write through one shows up through the other and in the enclosing function
-        // without sharing, this printed 1,1,0 on the tree-walker and 1,2,0 on the VM
+        // without sharing, a closure kept its own copy and the others never saw its writes
         { "closure: sibling closures over the same enclosing local observe each other's mutations",
           "fn make_counter()\n"
           "  local count = 0\n"
@@ -577,6 +577,153 @@ int main() {
           "print(make_and_peek())\n",
           "2\n" },
 
+        // scoping is lexical: a function sees its own locals, what it closed over, and globals. never its callers' locals
+        { "scope: a function cannot read a local of the function that called it",
+          "fn sc_inner() return sc_secret end\n"
+          "fn sc_outer()\n"
+          "  local sc_secret = 42\n"
+          "  return sc_inner()\n"
+          "end\n"
+          "try\n"
+          "  print(sc_outer())\n"
+          "catch e\n"
+          "  print(\"caught\")\n"
+          "end\n",
+          "caught\n" },
+
+        { "scope: assigning in a function never writes the caller's local, it makes a new local",
+          "fn sc_inner()\n"
+          "  sc_v = 1\n"
+          "  return sc_v\n"
+          "end\n"
+          "fn sc_outer()\n"
+          "  local sc_v = 42\n"
+          "  sc_inner()\n"
+          "  return sc_v\n"
+          "end\n"
+          "print(sc_outer())\n",
+          "42\n" },
+
+        // the compiler decides per function whether it needs the running frame captured (a function that uses no variable
+        // of an enclosing function does not), and whether a name is a global. these mix every case in one function
+        // a variable that an inner function uses lives in its own cell, made when the variable is defined. so a loop variable is a
+        // new variable on every pass, and a closure keeps it after the loop is over
+        { "closure: each pass of a for loop gets its own variable, and a closure keeps it after the loop",
+          "import \"embrlib\"\n"
+          "sc_fns = []\n"
+          "for sc_i in [1, 2, 3]\n"
+          "  sc_fns = push(sc_fns, fn() return sc_i end)\n"
+          "end\n"
+          "print(sc_fns[0]())\nprint(sc_fns[1]())\nprint(sc_fns[2]())\n"
+          "fn sc_mk()\n"
+          "  out = []\n"
+          "  for k in [10, 20]\n"
+          "    out = push(out, fn() k = k + 1 return k end)\n"
+          "  end\n"
+          "  return out\n"
+          "end\n"
+          "r = sc_mk()\n"
+          "print(r[0]())\nprint(r[0]())\nprint(r[1]())\n",
+          "1\n2\n3\n11\n12\n21\n" },
+
+        { "closure: nested functions can call each other whichever is defined first",
+          "fn sc_outer()\n"
+          "  fn even(n) if n == 0 return 1 end return odd(n - 1) end\n"
+          "  fn odd(n) if n == 0 return 0 end return even(n - 1) end\n"
+          "  return even(10)\n"
+          "end\n"
+          "print(sc_outer())\n",
+          "1\n" },
+
+        { "closure: a name the enclosing function only assigns resolves to the global when one exists, or to a later local",
+          "sc_gx = 0\n"
+          "fn sc_outer2()\n"
+          "  sc_gx = 5\n"
+          "  f = fn() return sc_gx end\n"
+          "  return f()\n"
+          "end\n"
+          "print(sc_outer2())\nprint(sc_gx)\n"
+          "fn sc_outer3()\n"
+          "  f = fn() return later end\n"
+          "  later = 42\n"
+          "  return f()\n"
+          "end\n"
+          "print(sc_outer3())\n",
+          "5\n5\n42\n" },
+
+        { "closure: every call of a function has its own captured variables, including parameters",
+          "fn sc_adder(x) return fn(y) return x + y end end\n"
+          "print(sc_adder(3)(4))\n"
+          "fn sc_rec(n)\n"
+          "  local v = n\n"
+          "  local f = fn() return v end\n"
+          "  if n > 0 sc_rec(n - 1) end\n"
+          "  return f()\n"
+          "end\n"
+          "print(sc_rec(3))\n",
+          "7\n3\n" },
+
+        { "scope: closures that capture, closures that don't, and a parameter that shadows an outer local",
+          "fn sc_outer()\n"
+          "  local a = 1\n"
+          "  local b = 2\n"
+          "  f = fn(x) return x + 1 end\n"
+          "  g = fn() a = a + 10 return a end\n"
+          "  h = fn() return g() + b end\n"
+          "  return [f(5), g(), h(), a]\n"
+          "end\n"
+          "r = sc_outer()\n"
+          "print(r[0])\nprint(r[1])\nprint(r[2])\nprint(r[3])\n"
+          "fn sc_mk()\n"
+          "  local v = 100\n"
+          "  return fn(v) return v end\n"
+          "end\n"
+          "print(sc_mk()(3))\n"
+          "fn sc_l1()\n"
+          "  local deep = \"deep\"\n"
+          "  fn l2()\n"
+          "    fn l3() return deep end\n"
+          "    return l3()\n"
+          "  end\n"
+          "  return l2()\n"
+          "end\n"
+          "print(sc_l1())\n",
+          "6\n11\n23\n21\n3\ndeep\n" },
+
+        { "scope: a closure made at the top level that captures nothing leaves later top-level code alone",
+          "sc_cb = fn() return 7 end\n"
+          "sc_acc = 0\n"
+          "sc_j = 0\n"
+          "while sc_j < 5\n"
+          "  sc_acc = sc_acc + sc_cb()\n"
+          "  sc_j = sc_j + 1\n"
+          "end\n"
+          "print(sc_acc)\n"
+          "for sc_i in [1, 2, 3]\n"
+          "  sc_show = fn() return sc_i end\n"
+          "  print(sc_show())\n"
+          "end\n"
+          "sc_total = 0\n"
+          "fn sc_bump() sc_total = sc_total + 5 return sc_total end\n"
+          "sc_bump()\n"
+          "print(sc_bump())\n"
+          "print(sc_total)\n",
+          "35\n1\n2\n3\n10\n10\n" },
+
+        { "scope: a closure reads the variables it was made next to, not the locals of whoever calls it",
+          "fn sc_make()\n"
+          "  local sc_v = 7\n"
+          "  fn get() return sc_v end\n"
+          "  return get\n"
+          "end\n"
+          "sc_g = sc_make()\n"
+          "fn sc_other()\n"
+          "  local sc_v = 1\n"
+          "  return sc_g()\n"
+          "end\n"
+          "print(sc_other())\n",
+          "7\n" },
+
 
 
         { "int/float: literal defaults",
@@ -609,10 +756,6 @@ int main() {
         { "local typed: enforces declared type on later assignment",
           "local int x = 5\nprint(x)\nx = 10\nprint(x)\n",
           "5\n10\n" },
-
-        { "local auto: infers type from initializer and enforces it",
-          "local auto x = 5\nprint(type(x))\n",
-          "int\n" },
 
         { "destructure: comma form with mixed types",
           "local int a, str b, c = [1, \"2\", 3]\nprint(a)\nprint(b)\nprint(c)\n",
@@ -846,7 +989,7 @@ int main() {
           "k = 0\nwhile k < 2\n  made = k * 10\n  k += 1\nend\nprint(made)\nmade = made + 1\nprint(made)\n",
           "10\n11\n" },
 
-        { "return at top level ends the script quietly (tree-walker used to std::terminate)",
+        { "return at top level ends the script quietly (it used to std::terminate)",
           "print(\"a\")\nreturn 1\nprint(\"b\")\n",
           "a\n" },
 
@@ -966,10 +1109,11 @@ int main() {
 
         { "resource limits: a huge range(), and NaN/huge numbers handed to natives, raise instead of exhausting memory or hitting UB",
           "big = 1.5\ni = 0\nwhile i < 40\nbig = big * 1000.0\ni = i + 1\nend\n"
-          "try\n  range(0, 100000000000)\n  print(\"unreachable\")\ncatch e\n  print(\"range capped\")\nend\n"
+          "r = range(0, 100000000000)\nprint(len(r))\n"
+          "try\n  r[0] = 1\n  print(\"unreachable\")\ncatch e\n  print(\"range capped\")\nend\n"
           "try\n  range(0, big)\n  print(\"unreachable\")\ncatch e\n  print(\"range huge capped\")\nend\n"
           "print(len(range(0, 1000)))\n",
-          "range capped\nrange huge capped\n1000\n" },
+          "100000000000\nrange capped\nrange huge capped\n1000\n" },
 
         { "string escapes: \\xNN is one byte, \\uXXXX and \\u{...} are UTF-8 encoded code points",
           "print(len(\"\\x41\"))\nprint(\"\\x41\\x42\")\nprint(len(\"\\xff\"))\n"
@@ -1017,8 +1161,8 @@ int main() {
           "fig\nbanana\nchunk 0 rejected\nempty rejected\nbad key rejected\n" },
 
         { "embrlib helpers: callbacks through a __call pointer-compatible path, and a throwing callback propagates (no crash)",
-          "try\n  any_do([1, 2], fn(x) error(\"cb failed\") end)\n  print(\"unreachable\")\ncatch e\n  print(e[\"message\"])\nend\n"
-          "try\n  unique(5)\n  print(\"unreachable\")\ncatch e\n  print(\"type checked\")\nend\n"
+          "fn lh(v) return v end try\n  any_do([1, 2], fn(x) error(\"cb failed\") end)\n  print(\"unreachable\")\ncatch e\n  print(e[\"message\"])\nend\n"
+          "try\n  unique(lh(5))\n  print(\"unreachable\")\ncatch e\n  print(\"type checked\")\nend\n"
           "print(len(unique(range(0, 2000))))\n",
           "cb failed\ntype checked\n2000\n" },
 
@@ -1043,9 +1187,9 @@ int main() {
           "2\n[1, 2, 30]\n[1, 2, 30, 1]\n[3, 2, 3, 9]\n5\n" },
 
         { "in-place index assignment still caps nesting depth",
-          "ip4_t = [0]\nip4_i = 0\ntry\n  while ip4_i < 1500\n    ip4_t[0] = [ip4_t[0]]\n    ip4_i += 1\n  end\n  print(\"no error\")\ncatch e\n  print(\"too deep\")\nend\n"
-          "ip4_u = [0]\nip4_j = 0\ntry\n  while ip4_j < 1500\n    ip4_u = push([], ip4_u)\n    ip4_j += 1\n  end\n  print(\"no error\")\ncatch e\n  print(\"too deep\")\nend\n"
-          "ip4_w = [[1]]\nip4_w[0] = 5\nip4_w[0] = [[2]]\nprint(ip4_w)\n",
+          "local arr<any> ip4_t = [0]\nip4_i = 0\ntry\n  while ip4_i < 1500\n    ip4_t[0] = [ip4_t[0]]\n    ip4_i += 1\n  end\n  print(\"no error\")\ncatch e\n  print(\"too deep\")\nend\n"
+          "local arr<any> ip4_u = [0]\nip4_j = 0\ntry\n  while ip4_j < 1500\n    ip4_u = push([], ip4_u)\n    ip4_j += 1\n  end\n  print(\"no error\")\ncatch e\n  print(\"too deep\")\nend\n"
+          "local arr<any> ip4_w = [[1]]\nip4_w[0] = 5\nip4_w[0] = [[2]]\nprint(ip4_w)\n",
           "too deep\ntoo deep\n[[[2]]]\n" },
 
         { "in-out natives: &name changes the variable where it lives, copies made earlier don't change",
@@ -1065,7 +1209,7 @@ int main() {
         { "in-out natives: a missing & , a stray & , and a reference that points at nothing are errors",
           "rf_x = [1, 2]\nrf_y = {\"k\": 1}\nfn rf_id(v)\n  return v\nend\n"
           "fn rf_try(code)\n  try\n    code()\n    print(\"unreachable\")\n  catch e\n    print(\"E\")\n  end\nend\n"
-          "rf_try(fn() append(rf_x, 1) end)\nrf_try(fn() len(&rf_x) end)\nrf_try(fn() rf_id(&rf_x) end)\n"
+          "rf_app = [append][0]\nrf_len = [len][0]\nrf_try(fn() rf_app(rf_x, 1) end)\nrf_try(fn() rf_len(&rf_x) end)\nrf_try(fn() rf_id(&rf_x) end)\n"
           "rf_try(fn() append(&rf_nope, 1) end)\nrf_try(fn() append(&rf_x[10], 1) end)\n"
           "rf_try(fn() append(&rf_y[\"nokey\"], 1) end)\nrf_try(fn() append(&rf_y, 1) end)\n"
           "rf_try(fn() insert(&rf_x, 9, 1) end)\nrf_try(fn() remove_at(&rf_x, 5) end)\n"
@@ -1073,23 +1217,277 @@ int main() {
           "E\nE\nE\nE\nE\nE\nE\nE\nE\nE\n[1, 2]\n{k: 1}\n" },
 
         { "in-out natives: nesting depth is still capped when the reference is deep inside a structure",
-          "rf_t = [[]]\nrf_c = 0\nrf_i = 0\ntry\n  while rf_i < 1500\n    rf_c = [rf_c]\n    append(&rf_t[0], rf_c)\n    rf_i += 1\n  end\n  print(\"no error\")\ncatch e\n  print(\"too deep\")\nend\n"
-          "rf_v = 0\nrf_j = 0\nwhile rf_j < 998\n  rf_v = [rf_v]\n  rf_j += 1\nend\n"
+          "rf_t = [[]]\nrf_c = []\nrf_i = 0\ntry\n  while rf_i < 1500\n    rf_c = [rf_c]\n    append(&rf_t[0], rf_c)\n    rf_i += 1\n  end\n  print(\"no error\")\ncatch e\n  print(\"too deep\")\nend\n"
+          "rf_v = []\nrf_j = 0\nwhile rf_j < 997\n  rf_v = [rf_v]\n  rf_j += 1\nend\n"
           "rf_w = [[[]]]\ntry\n  append(&rf_w[0][0], rf_v)\n  print(\"no error\")\ncatch e\n  print(\"too deep\")\nend\n"
           "print(len(rf_w[0][0]))\nrf_z = []\nappend(&rf_z, rf_v)\nprint(len(rf_z))\n",
           "too deep\ntoo deep\n0\n1\n" },
 
         { "in-place ops: errors are the same as before and leave the variable alone; a user-defined push or str still works",
-          "ip3_a = [1, 2]\n"
+          "fn lh(v) return v end local arr<any> ip3_a = [1, 2]\n"
           "try\n  ip3_a[5] = 1\n  print(\"unreachable\")\ncatch e\n  print(\"range\")\nend\n"
           "try\n  zzz[0] = 1\n  print(\"unreachable\")\ncatch e\n  print(\"undefined\")\nend\n"
-          "ip3_n = 5\ntry\n  ip3_n[0] = 1\n  print(\"unreachable\")\ncatch e\n  print(\"not indexable\")\nend\n"
+          "ip3_n = lh(5)\ntry\n  ip3_n[0] = 1\n  print(\"unreachable\")\ncatch e\n  print(\"not indexable\")\nend\n"
           "print(ip3_a)\n"
           "fn push(ip3_x, ip3_y)\n  return [\"mine\"]\nend\n"
           "ip3_a = push(ip3_a, 3)\nprint(ip3_a)\n"
           "ip3_m = {\"k1\": 1}\nfn str(ip3_x)\n  ip3_m = {\"k2\": 42}\n  return \"1\"\nend\n"
           "print(ip3_m[\"k\" + str(1)])\n",
           "range\nundefined\nnot indexable\n[1, 2]\n[\"mine\"]\n1\n" },
+
+        { "copy on write: a copy of a string, array or map never sees later writes to the original, or the other way round",
+          "cw_a = [1, 2, 3]\ncw_b = cw_a\ncw_b[0] = 99\nprint(cw_a)\nprint(cw_b)\n"
+          "cw_m = {\"k\": [1, 2]}\ncw_n = cw_m\ncw_n[\"k\"][0] = 7\nappend(&cw_n[\"k\"], 5)\nprint(cw_m)\nprint(cw_n)\n"
+          "fn cw_mut(x)\n  x[0] = 0\n  return x\nend\ncw_c = [1, 2]\ncw_d = cw_mut(cw_c)\nprint(cw_c)\nprint(cw_d)\n"
+          "cw_s = \"ab\"\ncw_t = cw_s\ncw_t[0] = \"z\"\ncw_s = cw_s + \"c\"\nprint(cw_s)\nprint(cw_t)\n"
+          "cw_i = [1]\ncw_o = [cw_i, cw_i]\ncw_o[0][0] = 5\nprint(cw_i)\nprint(cw_o)\n"
+          "cw_q = [1, 2, 3]\nfor cw_x in cw_q\n  cw_q[1] = 100\n  print(cw_x)\nend\nprint(cw_q)\n",
+          "[1, 2, 3]\n[99, 2, 3]\n{k: [1, 2]}\n{k: [7, 2, 5]}\n[1, 2]\n[0, 2]\nabc\nzb\n[1]\n[[5], [1]]\n1\n2\n3\n[1, 100, 3]\n" },
+
+        { "try/catch: an error caught outside a for loop drops that loop's iterator, so the enclosing loop carries on",
+          "tc_n = 0\nfor tc_i in [1, 2, 3]\n  try\n    for tc_j in [10, 20]\n      error(\"x\")\n    end\n  catch tc_e\n    tc_n += 1\n  end\n  print(tc_i)\nend\nprint(tc_n)\n"
+          "fn tc_f()\n  for tc_k in [1, 2]\n    try\n      for tc_m in [1]\n        error(\"y\")\n      end\n    catch tc_e2\n      print(\"c\")\n    end\n  end\nend\ntc_f()\n",
+          "1\n2\n3\n3\nc\nc\n" },
+
+        { "import: an import statement leaves nothing on the stack (inside a loop it must not pile up)",
+          "fn im_f()\n  im_i = 0\n  while im_i < 3\n    import \"embrlib\"\n    im_i += 1\n  end\n  return im_i\nend\nprint(im_f())\n"
+          "try\n  import \"embrlib\"\ncatch im_e\n  print(\"no\")\nend\nprint(\"ok\")\n",
+          "3\nok\n" },
+
+        // fused instructions (see quickenChunk in vm.h): each one has to do what the plain instructions it stands in for do
+        { "fused: int loops in a function and at the top level count and add the same as plain code",
+          "fn fu_f(n)\n  i = 0\n  t = 0\n  while i < n\n    t = t + i % 7\n    i = i + 1\n  end\n  return t\nend\nprint(fu_f(100))\n"
+          "fu_i = 0\nfu_t = 0\nwhile fu_i < 100\n  fu_t = fu_t + fu_i % 7\n  fu_i = fu_i + 1\nend\nprint(fu_t)\n"
+          "fu_n = 3\nfu_j = 0\nwhile fu_j < fu_n\n  fu_j = fu_j + 1\nend\nprint(fu_j)\n",
+          "295\n295\n3\n" },
+
+        { "fused: an int that overflows widens to a float, and an int next to a float compares as numbers",
+          "fn fu_o()\n  x = 9223372036854775807\n  y = x + 1\n  return y > 9000000000000000000\nend\nprint(fu_o())\n"
+          "fn fu_c(a)\n  b = 2.5\n  if a < b\n    return 1\n  end\n  return 0\nend\nprint(fu_c(2))\nprint(fu_c(3))\n"
+          "fn fu_m(a, b)\n  return a * b\nend\nprint(fu_m(3037000500, 3037000500) > 9000000000000000000)\n",
+          "1\n1\n0\n1\n" },
+
+        { "fused: a modulo by zero, a name that is not defined yet and a string operand still raise their errors",
+          "fn fu_z(a, b)\n  return a % b\nend\ntry\n  fu_z(5, 0)\ncatch e\n  print(e[\"message\"])\nend\n"
+          "fn fu_u(a)\n  if a > 0\n    k = 1\n  end\n  return k + a\nend\ntry\n  fu_u(0)\ncatch e\n  print(\"undefined\")\nend\nprint(fu_u(2))\n"
+          "fn fu_s(a, b)\n  return a + b\nend\nprint(fu_s(\"x\", 1))\n",
+          "modulo by zero\nundefined\n3\nx1\n" },
+
+        { "fused: a store into a variable declared num, float or int keeps its type rules",
+          "fn fu_t()\n  local num t = 0\n  i = 0\n  while i < 3\n    t = t + i\n    i = i + 1\n  end\n  t = t + 0.5\n  return t\nend\nprint(fu_t())\n"
+          "fn fu_w()\n  local int w = 1\n  try\n    w = w + 0.5\n  catch e\n    print(\"caught\")\n  end\n  return w\nend\nprint(fu_w())\n",
+          "3.5\ncaught\n1\n" },
+
+        // ranges: [a...b] and [a, b...c] are arrays that are not built until something needs the list
+        { "range: [a...b] includes both ends, [a, b...c] steps by b - a, and the wrong direction is empty",
+          "print([0...5])\nprint([0, 2...10])\nprint([10, 8...0])\nprint([5...0])\nprint([3...3])\nprint([0, 3...10])\n"
+          "n = 2\nprint([n...n + 2])\nprint(len([1...4]))\nprint([1...4] == [1, 2, 3, 4])\n",
+          "[0, 1, 2, 3, 4, 5]\n[0, 2, 4, 6, 8, 10]\n[10, 8, 6, 4, 2, 0]\n[]\n[3]\n[0, 3, 6, 9]\n[2, 3, 4]\n4\n1\n" },
+
+        { "range: a huge range costs nothing until it is turned into a list: len, an element, a for loop with a break",
+          "r = [0...100000000000]\nprint(len(r))\nprint(r[99999999999])\n"
+          "for i in [5, 10...100000000000]\n  print(i)\n  if i > 15\n    break\n  end\nend\n",
+          "100000000001\n99999999999\n5\n10\n15\n20\n" },
+
+        { "range: it is a plain array when you change it, and building a huge one is an error you can catch",
+          "x = [1...3]\nx[0] = 99\nprint(x)\nimport \"embrlib\"\nx = push(x, 7)\nprint(x)\n"
+          "try\n  y = [0...1000000000000]\n  y[0] = 1\n  print(\"unreachable\")\ncatch e\n  print(\"too long\")\nend\n",
+          "[99, 2, 3]\n[99, 2, 3, 7]\ntoo long\n" },
+
+        { "range: bounds have to be whole numbers and the step cannot be zero",
+          "try\n  print([0.5...3])\ncatch e\n  print(e[\"message\"])\nend\n"
+          "try\n  print([2, 2...9])\ncatch e\n  print(e[\"message\"])\nend\n"
+          "print([1.0...3.0])\n",
+          "the start of a range has to be a whole number, got 0.5\nthe step of a range can't be zero: its first two numbers are equal\n[1, 2, 3]\n" },
+
+        { "for: an array is not copied for the loop, but the loop still sees it as it was when it started",
+          "import \"embrlib\"\na = [1, 2, 3]\nfor x in a\n  a = push(a, x * 10)\nend\nprint(a)\n"
+          "b = [1, 2, 3]\nfor x in b\n  b[2] = 0\n  print(x)\nend\nprint(b)\n",
+          "[1, 2, 3, 10, 20, 30]\n1\n2\n3\n[1, 2, 0]\n" },
+
+        { "for: each pass over a range is a new variable that a closure keeps",
+          "fns = []\nimport \"embrlib\"\nfor i in [1...3]\n  fns = push(fns, fn() return i end)\nend\n"
+          "print(fns[0]())\nprint(fns[1]())\nprint(fns[2]())\n",
+          "1\n2\n3\n" },
+
+        // overload groups (`name__N`)
+        { "overload: a bare name picks the member by the argument types, a numbered name is always that member",
+          "fn ov_show__1(x: int)\n  return \"int \" + str(x)\nend\n"
+          "fn ov_show__2(x: str)\n  return \"str \" + x\nend\n"
+          "fn ov_show__3(x: num, y: num)\n  return \"two\"\nend\n"
+          "print(ov_show(5))\nprint(ov_show(\"a\"))\nprint(ov_show(1, 2.5))\nprint(ov_show__2(\"direct\"))\n"
+          "f = ov_show\nprint(f(9))\n",
+          "int 5\nstr a\ntwo\nstr direct\nint 9\n" },
+
+        { "overload: when the types are only known at run time the dispatcher chooses, and says what it could have taken",
+          "fn ov_d__1(x: int)\n  return \"int\"\nend\nfn ov_d__2(x: str)\n  return \"str\"\nend\n"
+          "fn ov_pass(v)\n  return ov_d(v)\nend\nprint(ov_pass(1))\nprint(ov_pass(\"s\"))\n"
+          "try\n  ov_pass([1])\ncatch e\n  print(e[\"message\"])\nend\n",
+          "int\nstr\nno overload of 'ov_d' takes (array); candidates: ov_d__1(int), ov_d__2(string)\n" },
+
+        { "overload: a new member added later joins the group and changes nothing for a call of an older one",
+          "fn ov_l__1(x: int)\n  return 1\nend\nprint(ov_l(2))\nprint(ov_l__1(2))\n"
+          "fn ov_l__2(x: str)\n  return 2\nend\nprint(ov_l(\"s\"))\nprint(ov_l__1(3))\n",
+          "1\n1\n2\n1\n" },
+
+        { "types: a variable keeps the type of its first value, and a value of another type is refused while running",
+          "fn lh(v) return v end ty_x = 1\ntry\n  ty_x = lh(\"s\")\n  print(\"unreachable\")\ncatch ty_e\n  print(ty_e[\"message\"])\nend\nprint(ty_x)\n"
+          "fn ty_f()\n  ty_v = 1.5\n  try\n    ty_v = lh(2)\n    print(\"unreachable\")\n  catch ty_e2\n    print(\"caught\")\n  end\n  return ty_v\nend\nprint(ty_f())\n",
+          "cannot assign string to 'ty_x' declared as int\n1\ncaught\n1.5\n" },
+
+        { "types: a first value the checker can't see still fixes the type",
+          "fn lh(v) return v end ty_u = lh(7)\ntry\n  ty_u = lh(\"s\")\n  print(\"unreachable\")\ncatch ty_e\n  print(\"caught\")\nend\nty_u = lh(9)\nprint(ty_u)\n"
+          "fn ty_g()\n  local ty_l = lh(1.5)\n  try\n    ty_l = lh(2)\n    print(\"unreachable\")\n  catch ty_e2\n    print(\"caught\")\n  end\n  return ty_l\nend\nprint(ty_g())\n",
+          "caught\n9\ncaught\n1.5\n" },
+
+        { "types: an int that overflows can't go back into an int variable",
+          "ty_big = 9223372036854775807\ntry\n  ty_big = ty_big + 1\n  print(\"unreachable\")\ncatch ty_e\n  print(\"caught\")\nend\nprint(type(ty_big + 1))\n",
+          "caught\nnumber\n" },
+
+        { "types: declared any and declared num are the ways to hold more than one type",
+          "local any ty_a = 1\nty_a = \"s\"\nty_a = [1]\nprint(ty_a)\n"
+          "local num ty_n = 1\nty_n = 2.5\nty_n = 3\nprint(ty_n)\nprint(type(ty_n))\n"
+          "fn ty_h(p: any)\n  p = \"changed\"\n  return p\nend\nprint(ty_h(1))\n",
+          "[1]\n3\nint\nchanged\n" },
+
+        { "types: a store carries the variable's type, and a typed parameter is checked when it is assigned",
+          "fn lh(v) return v end fn ty_p(a: int)\n  try\n    a = lh(\"s\")\n    print(\"unreachable\")\n  catch ty_e\n    print(\"caught\")\n  end\n  a = 5\n  return a\nend\nprint(ty_p(1))\n",
+          "caught\n5\n" },
+
+        { "element types: a typed container runs like an untyped one",
+          "local arr<int> et_a = []\nappend(&et_a, 1)\nappend(&et_a, 2)\nprint(et_a)\n"
+          "local map<str> et_m = {\"a\": \"x\"}\nprint(et_m[\"a\"])\n"
+          "fn et_f(xs: arr<int>) -> arr<int>\n  return push(xs, 3)\nend\nprint(et_f(et_a))\n"
+          "fn et_g(...n: int)\n  return len(n)\nend\nprint(et_g(1, 2, 3))\n"
+          "local arr<arr<str>> et_n = [[\"a\"], []]\nprint(len(et_n))\n"
+          "et_r = [0...3]\net_r[0] = 5\nprint(et_r)\n",
+          "[1, 2]\nx\n[1, 2, 3]\n3\n2\n[5, 1, 2, 3]\n" },
+
+        { "calls: a function named by a local, a captured variable or a global is called without a copy of it",
+          "fn ct_apply(f, x)\n  return f(x)\nend\n"
+          "print(ct_apply(fn(v) return v + 1 end, 4))\nprint(ct_apply(len, [1, 2, 3]))\n"
+          "fn ct_outer(g)\n  h = fn(x) return g(x) * 2 end\n  return h(5)\nend\nprint(ct_outer(fn(v) return v + 1 end))\n"
+          "fn ct_mk()\n  n = 0\n  return fn()\n    n = n + 1\n    return n\n  end\nend\nct_c = ct_mk()\nprint(ct_c(), ct_c(), ct_c())\n"
+          "ct_a = []\nct_a = push(ct_a, 1)\nct_a = push(ct_a, 2)\nprint(ct_a)\n"
+          "ct_g = fn(a, b) return a end\ntry\n  ct_g(1)\n  print(\"unreachable\")\ncatch e\n  print(\"too few\")\nend\n"
+          "local any ct_n = 5\ntry\n  ct_n(1)\n  print(\"unreachable\")\ncatch e\n  print(\"not callable\")\nend\n"
+          "fn ct_rec(n)\n  if n < 1\n    return 0\n  end\n  return n + ct_rec(n - 1)\nend\nprint(ct_rec(10))\n",
+          "5\n3\n12\n1 2 3\n[1, 2]\ntoo few\nnot callable\n55\n" },
+
+        { "calls: a function replaced while its arguments are worked out is called as it is then",
+          "ct_f = fn(x) return x end\nfn ct_swap()\n  ct_f = fn(x) return 100 end\n  return 1\nend\nprint(ct_f(ct_swap()))\n"
+          "fn ct_loc(f)\n  r = f(1)\n  return r\nend\nprint(ct_loc(fn(x) return x + 41 end))\n",
+          "100\n42\n" },
+
+        { "inline: a call of a `name(x) = expr` function is its expression, with each argument worked out once and in order",
+          "il_sq(x) = x * x\n"
+          "il_hyp(a, b) = il_sq(a) + il_sq(b)\n"
+          "local il_n = 0\nfn il_bump()\n  il_n += 1\n  return il_n\nend\n"
+          "print(il_sq(7), il_sq(2.5), il_hyp(3, 4))\n"
+          "print(il_sq(il_bump()), il_n)\n"
+          "print(il_hyp(il_bump(), il_bump()), il_n)\n"
+          "local il_x = 10\nprint(il_sq(il_x), il_x)\n"
+          "fn il_use(v) return il_sq(v + 1) end\nprint(il_use(4))\n"
+          "for il_i in [1, 2, 3]\n  print(il_sq(il_i))\nend\n"
+          "il_first(a) = a[0]\nlocal il_xs = [7, 8]\nprint(il_first(il_xs), il_first([5, 6]))\n"
+          "local il_p = 3\nprint(il_hyp(il_p, il_p + 1), il_hyp(il_p, 2))\n"
+          "local il_f = il_sq\nprint(il_f(9))\n",
+          "49 6.25 25\n1 1\n13 3\n100 10\n25\n1\n4\n9\n7 5\n25 13\n81\n" },
+
+        { "inline: a call stays an ordinary one when the name could mean something else there",
+          "local il_k = 3\nil_addk(v) = v + il_k\n"
+          "fn il_shadow(il_k) return il_addk(1) end\nprint(il_shadow(100), il_addk(1))\n"
+          "il_o(x) = x + 1\nprint(il_o(1))\nil_o = fn(x) return x + 100 end\nprint(il_o(1))\n"
+          "il_rec(n) = n <= 0 and 100 or n + il_rec(n - 1)\nprint(il_rec(4))\n"
+          "il_two() = 2\nprint(il_two() + il_two())\n"
+          "fn il_ret(x) -> int\n  return x\nend\nil_big(x) = x\nprint(il_big(5))\n",
+          "4 4\n2\n101\n110\n4\n5\n" },
+
+        { "inline: a typed parameter is still checked",
+          "il_t(n: int) = n * 2\nprint(il_t(4))\n"
+          "local any il_bad = \"a\"\ntry\n  print(il_t(il_bad))\ncatch e\n  print(e.message)\nend\n",
+          "8\ncannot assign string to 'n' declared as int\n" },
+
+        { "const: a constant is worked out when the script is compiled, and is still a variable",
+          "const cn_n = 10\nconst cn_s = \"a\" + \"b\"\nconst cn_x = cn_n * 2.5 + 1\nconst cn_f = cn_n > 5 and 7\n"
+          "const cn_i = 7 / 2\nconst cn_e = 3 != 3\n"
+          "print(cn_n, cn_s, cn_x, cn_f, cn_i, cn_e)\nprint(9223372036854775807 + 1 > 9000000000000000000)\n"
+          "fn cn_f2(v) return v + cn_n * 2 end\nprint(cn_f2(1))\n"
+          "local cn_g = cn_n\nprint(cn_g, 2 * 3 + 4, -(2 + 3), !0, 10 % 4, 7 - 10)\n"
+          "try\n  print(1 / 0)\ncatch e\n  print(\"div\")\nend\n",
+          "10 ab 26 7 3.5 0\n1\n21\n10 10 -5 1 2 -3\ndiv\n" },
+
+        { "const: a pure native (len, str, type, num, ...) called with constant arguments is worked out when compiling",
+          "const cn_len = len(\"abcd\")\nconst cn_mix = cn_len * 2 + len(str(123))\nconst cn_t = type(1.5) + \":\" + str(num(\"4\") + cn_len)\n"
+          "print(cn_len, cn_mix, cn_t)\nprint(type(cn_len))\n",
+          "4 11 number:8\nint\n" },
+
+        { "scoping in a hot loop: a function's first store assigns an existing global, else makes its own local, typed by that value",
+          "fs_g = 0\nfn fs_set(v)\n  fs_g = v\n  fs_tmp = v * 2\n  return fs_tmp\nend\n"
+          "fn fs_closure()\n  n = 0\n  return fn()\n    n = n + 1\n    s = \"x\"\n    s = s + str(n)\n    return s\n  end\nend\n"
+          "i = 0\nwhile i < 3000\n  fs_set(i)\n  i = i + 1\nend\nprint(fs_g, has(globals(), \"fs_tmp\"))\n"
+          "c = fs_closure()\nj = 0\nr = \"\"\nwhile j < 2000\n  r = c()\n  j = j + 1\nend\nprint(r)\n",
+          "2999 0\nx2000\n" },
+
+        { "const: a name that a function or block binds again is not folded",
+          "const cn_k = 3\nfn cn_shadow(cn_k) return cn_k + 1 end\nprint(cn_shadow(10), cn_k)\n"
+          "for cn_k in [1]\n  print(cn_k)\nend\n",
+          "11 3\n1\n" },
+
+        { "const fn: a function with statements is written out at its calls",
+          "const fn cn_clamp(v, lo, hi)\n  if v < lo\n    return lo\n  elif v > hi\n    return hi\n  end\n  return v\nend\n"
+          "const fn cn_find(xs, want)\n  for i in xs\n    for j in [0...2]\n      if i == want\n        return j + 100\n      end\n    end\n  end\n  return -1\nend\n"
+          "const fn cn_acc(n)\n  local out = []\n  local k = 0\n  while k < n\n    k += 1\n    if k % 2 == 0\n      continue\n    end\n    out = push(out, k * k)\n    if k > 7\n      break\n    end\n  end\n  return out\nend\n"
+          "const fn cn_none(x)\n  local y = x\nend\n"
+          "local cn_total = 100\nconst fn cn_sum(n)\n  local cn_total = 0\n  for i in [1...n]\n    cn_total += i\n  end\n  return cn_total\nend\n"
+          "print(cn_clamp(15, 0, 10), cn_clamp(-3, 0, 10), cn_clamp(5, 0, 10), cn_clamp(cn_clamp(20, 0, 9), 2, 5))\n"
+          "print(cn_find([3, 4, 5], 4), cn_find([3], 9), cn_acc(12), cn_none(5))\n"
+          "print(cn_sum(10), cn_total)\n"
+          "cn_p = cn_clamp\nprint(cn_p(50, 0, 10))\n"
+          "fn cn_inloop()\n  local s = 0\n  local i = 0\n  while i < 5\n    s += cn_clamp(i, 1, 3)\n    i += 1\n  end\n  return s\nend\nprint(cn_inloop())\n"
+          "const fn cn_w(a, b)\n  a += 1\n  return a * b\nend\nlocal cn_x = 3\nprint(cn_w(cn_x, 2), cn_x, cn_clamp(cn_x, 0, 2), cn_clamp(cn_x + 1, cn_x, 9))\n"
+          "local cn_cnt = 0\nfn cn_bump()\n  cn_cnt += 1\n  return cn_cnt\nend\n"
+          "const fn cn_imp(v)\n  cn_bump()\n  return v\nend\nprint(cn_imp(cn_cnt), cn_cnt)\n",
+          "10 0 5 5\n100 -1 [1, 9, 25, 49, 81] 0\n55 100\n10\n10\n8 3 2 4\n0 1\n" },
+
+        { "natives: a call that does not fit the signature gives the same messages as before",
+          "local any ns_f = len\nlocal any ns_j = join\nlocal any ns_bad = \"abc\"\nlocal any ns_l = [1]\n"
+          "try\n  ns_f()\ncatch e\n  print(e.message)\nend\n"
+          "try\n  ns_f(1, 2)\ncatch e\n  print(e.message)\nend\n"
+          "try\n  ns_f(&ns_l)\ncatch e\n  print(e.message)\nend\n"
+          "try\n  ns_j(ns_bad, 1)\ncatch e\n  print(e.message)\nend\n"
+          "print(ns_f(ns_bad), ns_f(ns_l))\n",
+          "too few arguments to 'len': expected 1 but got 0\ntoo many arguments to 'len': expected at most 1 but got 2\n"
+          "argument 'val' to 'len' is not an in-out parameter, so it can't take '&'\nargument 'arr' to 'join': expected array but got string\n3 1\n" },
+
+        { "scoping: a block without a local or fn has no scope, one with them still erases them; a plain assignment makes a variable of the function",
+          "fn sc_f()\n  local total = 0\n  local i = 0\n  while i < 3\n    total = total + i\n    if total > 0\n      total = total + 1\n    end\n    i += 1\n  end\n  return total\nend\nprint(sc_f())\n"
+          "fn sc_g()\n  local k = 0\n  while k < 2\n    sc_fresh = k * 10\n    k += 1\n  end\n  try\n    print(sc_fresh)\n  catch e\n    print(\"gone\")\n  end\nend\nsc_g()\n"
+          "fn sc_h()\n  if 1\n    sc_inner = 5\n  end\n  local j = 0\n  while j < 1\n    sc_inner = 7\n    j += 1\n  end\n  try\n    print(sc_inner)\n  catch e\n    print(\"erased\")\n  end\nend\nsc_h()\n"
+          "fn sc_i()\n  local s = 0\n  local n = 0\n  while n < 10\n    n += 1\n    if n % 2 == 0\n      continue\n    end\n    if n > 7\n      break\n    end\n    s += n\n  end\n  return s\nend\nprint(sc_i())\n"
+          "sc_t = 0\nsc_n = 0\nwhile sc_n < 4\n  sc_t = sc_t + sc_n\n  sc_n += 1\nend\nprint(sc_t)\n"
+          "fn sc_l()\n  local i = 0\n  while i < 2\n    local sc_inner2 = i\n    i += 1\n  end\n  try\n    print(sc_inner2)\n  catch e\n    print(\"local gone\")\n  end\nend\nsc_l()\n"
+          "fn sc_c()\n  local fs = []\n  local i = 0\n  while i < 3\n    local k = i * 2\n    fs = push(fs, fn() return k end)\n    i += 1\n  end\n  return fs[0]() + fs[1]() + fs[2]()\nend\nprint(sc_c())\n",
+          "5\n10\n7\n16\n6\nlocal gone\n6\n" },
+
+        { "natives: typed bindings in embrlib (keys, values, sum, index_of, type, len, str) refuse a wrong type and give the same answers",
+          "local any tn_n = 5\nlocal any tn_s = \"abc\"\nlocal any tn_m = {\"b\": 2, \"a\": 1}\n"
+          "try\n  keys(tn_s)\ncatch e\n  print(e.message)\nend\n"
+          "try\n  sum([1, tn_s])\ncatch e\n  print(e.message)\nend\n"
+          "try\n  index_of(tn_n, 1)\ncatch e\n  print(e.message)\nend\n"
+          "try\n  len(tn_n)\ncatch e\n  print(e.message)\nend\n"
+          "print(keys(tn_m), values(tn_m), sum([1, 2, 3]), sum([1, 2.5]), index_of([4, 5, 6], 5), index_of([1], \"1\"))\n"
+          "print(type(tn_n), type(tn_s), type(tn_m), len(tn_m), len(tn_s), len([1, 2, 3]), str(12), str([1]))\n",
+          "argument 'm' to 'keys': expected map but got string\nelement 1 is string, expected a number\n"
+          "argument 'arr' to 'index_of': expected array but got int\n"
+          "no __<tag>_len defined and val is not a str/arr/map (got int)\n"
+          "[\"a\", \"b\"] [1, 2] 6 3.5 1 -1\nint string map 2 3 3 12 [1]\n" },
+
+        { "scoping: a function called from native code keeps its variables to itself (they must not become globals)",
+          "fn ty_cb(v)\n  ty_leaked = v\n  return 0\nend\n"
+          "sort_cmp([2, 1], fn(a, b) ty_cb(a)\n return a - b end)\n"
+          "try\n  print(ty_leaked)\ncatch ty_e\n  print(\"not a global\")\nend\n",
+          "not a global\n" },
     };
     return embr_test::runSuite("embr core test suite", tests, {"embrlib"});
 }

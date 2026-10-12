@@ -37,3 +37,7 @@ print(e["message"])
 end
 g(a, b) = a
 print (f (1))
+bits=a&b|c^d<<1>>2
+m=~x
+local arr<arr<int>> g=[[1]]
+h(a,&bits)

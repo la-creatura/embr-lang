@@ -1,0 +1,35 @@
+# const: values worked out when the script is compiled, and const fn: a function copied into each call
+import "embrlib"
+
+const WIDTH = 8
+const HEIGHT = WIDTH * 2 + 1
+const TITLE = "grid " + "demo"
+
+# an expression made only of constants becomes one number or string
+print(TITLE, WIDTH * HEIGHT, 2 * 3 + 4)
+
+# a const fn may have statements. it is not a call: no frame, and a return jumps to the end of the copy
+const fn clamp(v, lo, hi)
+    if v < lo
+        return lo
+    elif v > hi
+        return hi
+    end
+    return v
+end
+
+const fn first_over(xs, limit)
+    for x in xs
+        if x > limit
+            return x
+        end
+    end
+    return -1
+end
+
+print(clamp(15, 0, WIDTH), clamp(-3, 0, WIDTH), clamp(5, 0, WIDTH))
+print(first_over([1, 5, 9, 12], 8), first_over([1, 2], 8))
+
+# it is still a function, so it can be passed around
+local f = clamp
+print(f(100, 0, 10))

@@ -20,6 +20,12 @@
 #
 # names starting with __testing_ are internal
 
+__module__ = {
+    "version": "1.0.0",
+    "description": "assertion helpers for `embr test` and for plain scripts",
+    "capabilities": [],
+}
+
 import "embrlib"
 import "str"
 
@@ -37,6 +43,7 @@ fn __testing_note(parts)
     return " (" + join(for_each_do(parts, fn(p) return str(p) end), " ") + ")"
 end
 
+# assert_true(cond, ...note) raises if cond is falsy. the note parts, if any, are added to the message
 fn assert_true(cond, ...note)
     if !cond
         error("assert_true failed: got " + __testing_show(cond) + __testing_note(note))
@@ -44,6 +51,7 @@ fn assert_true(cond, ...note)
     return 0
 end
 
+# assert_false(cond, ...note) raises if cond is truthy
 fn assert_false(cond, ...note)
     if cond
         error("assert_false failed: got " + __testing_show(cond) + __testing_note(note))
@@ -51,6 +59,7 @@ fn assert_false(cond, ...note)
     return 0
 end
 
+# assert_eq(actual, expected, ...note) raises unless the two are equal (arrays and maps compare by content)
 fn assert_eq(actual, expected, ...note)
     if actual != expected
         error("assert_eq failed: expected " + __testing_show(expected) + ", got " + __testing_show(actual) + __testing_note(note))
@@ -58,6 +67,7 @@ fn assert_eq(actual, expected, ...note)
     return 0
 end
 
+# assert_ne(actual, unexpected, ...note) raises if the two are equal
 fn assert_ne(actual, unexpected, ...note)
     if actual == unexpected
         error("assert_ne failed: both are " + __testing_show(actual) + __testing_note(note))
@@ -65,6 +75,7 @@ fn assert_ne(actual, unexpected, ...note)
     return 0
 end
 
+# assert_near(actual, expected, eps, ...note) raises unless the two numbers differ by at most eps
 fn assert_near(actual, expected, eps, ...note)
     local diff = actual - expected
     if diff < 0
@@ -101,6 +112,7 @@ fn assert_raises_with(f, text, ...note)
     return err
 end
 
+# fail(msg) raises an error with this message, to fail a test by hand
 fn fail(msg)
     error("fail: " + msg)
 end

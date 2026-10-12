@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- the file types of embr, for the shared mime database (install.sh copies this to ~/.local/share/mime/packages) -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-embr">
+    <comment>embr script</comment>
+    <sub-class-of type="text/plain"/>
+    <generic-icon name="text-x-script"/>
+    <glob pattern="*.embr"/>
+  </mime-type>
+  <mime-type type="application/x-embr-bytecode">
+    <comment>compiled embr script</comment>
+    <generic-icon name="application-x-executable"/>
+    <glob pattern="*.vmbr"/>
+  </mime-type>
+  <mime-type type="application/x-embr-package">
+    <comment>embr package</comment>
+    <generic-icon name="package-x-generic"/>
+    <glob pattern="*.pmbr"/>
+  </mime-type>
+</mime-info>

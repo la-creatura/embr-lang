@@ -1,0 +1,19 @@
+words = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigma", "tau", "upsilon"]
+seed = 12345
+parts = []
+i = 0
+while i < 200000:
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    parts.append(words[seed % 20])
+    i = i + 1
+text = " ".join(parts)
+counts = {}
+for w in text.split(" "):
+    if w in counts:
+        counts[w] = counts[w] + 1
+    else:
+        counts[w] = 1
+print(len(counts))
+print(counts["alpha"])
+print(counts["upsilon"])
+print(len(text))

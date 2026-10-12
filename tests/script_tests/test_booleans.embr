@@ -1,0 +1,106 @@
+# a yes/no answer is the int 1 or 0 (embr has no boolean type), not a float
+import "testing.embr"
+import "embrlib"
+import "embrmath"
+import "embrmeta"
+import "embrtypes"
+import "str"
+import "regex"
+import "unicode"
+import "table"
+import "vec"
+import "path"
+import "fs"
+import "json"
+import "os"
+import "parallel"
+
+fn check_int(v, what)
+    assert_eq(type(v), "int", what + " should be an int")
+end
+
+fn test_operators()
+    check_int(1 == 1, "==")
+    check_int(1 != 1, "!=")
+    check_int(1 < 2, "<")
+    check_int(2.5 > 1, ">")
+    check_int(1 <= 1, "<=")
+    check_int(1.5 >= 2, ">=")
+    check_int("a" == "b", "== on strings")
+    check_int([1] == [1], "== on arrays")
+    check_int(!0, "!")
+    check_int(!5, "! of a number")
+    check_int(!"", "! of a string")
+end
+
+fn test_a_comparison_can_be_used_as_bits_and_as_a_count()
+    flags = (3 > 1) << 2 | (1 > 3)
+    assert_eq(flags, 4)
+    n = 0
+    for x in [1, 5, 9]
+        n = n + (x > 2)
+    end
+    assert_eq(n, 2)
+    assert_eq(type(n), "int")
+end
+
+fn test_comparison_results_have_the_int_type_for_the_checker()
+    ok = 1 < 2
+    ok = 0
+    local int total = 5 > 1
+    assert_eq(total, 1)
+end
+
+fn test_embrlib()
+    check_int(has({a: 1}, "a"), "has on a map")
+    check_int(has([1, 2], 5), "has on an array")
+    check_int(any_do([1, 2], fn(x) return x > 1 end), "any_do")
+    check_int(all_do([1, 2], fn(x) return x > 1 end), "all_do")
+    check_int(is_native(len), "is_native")
+    m = {a: 1}
+    check_int(remove_key(&m, "a"), "remove_key")
+end
+
+fn test_text_and_regex()
+    check_int(str_startswith("abc", "a"), "str_startswith")
+    check_int(str_endswith("abc", "c"), "str_endswith")
+    check_int(str_isdigit("12"), "str_isdigit")
+    check_int(str_isalpha("ab"), "str_isalpha")
+    check_int(str_isalnum("a1"), "str_isalnum")
+    check_int(re_test("abc", "b"), "re_test")
+    check_int(unicode_valid("abc"), "unicode_valid")
+    check_int(unicode_isalpha("a"), "unicode_isalpha")
+    check_int(unicode_isdigit("1"), "unicode_isdigit")
+    check_int(unicode_isalnum("a"), "unicode_isalnum")
+end
+
+fn test_containers_and_types()
+    t = table()
+    table_set(t, "k", 1)
+    check_int(table_has(t, "k"), "table_has")
+    check_int(table_delete(t, "k"), "table_delete")
+    v = vec()
+    check_int(is_vec(v), "is_vec")
+    check_int(is_nil(5), "is_nil")
+    check_int(type_check(type_int(), 5), "type_check")
+    check_int(meta_has("len"), "meta_has")
+    check_int(meta_undef("nothing_defined_with_this_name"), "meta_undef")
+end
+
+fn test_files_paths_json_and_os()
+    check_int(path_is_abs("/x"), "path_is_abs")
+    check_int(fs_exists("."), "fs_exists")
+    check_int(fs_is_dir("."), "fs_is_dir")
+    check_int(json_valid("[1]"), "json_valid")
+    check_int(os_has_env("PATH"), "os_has_env")
+end
+
+fn test_parallel()
+    c = channel()
+    check_int(channel_closed(c), "channel_closed")
+    check_int(channel_try_send(c, 1), "channel_try_send")
+    st = shared_table()
+    shared_table_set(st, "k", 1)
+    check_int(shared_table_has(st, "k"), "shared_table_has")
+    check_int(shared_table_delete(st, "k"), "shared_table_delete")
+end

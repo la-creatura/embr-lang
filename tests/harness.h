@@ -30,35 +30,31 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <memory>
 
 #include <cstdlib>
 
 namespace embr_test {
 
-// these suites exercise language/stdlib behavior against one backend at a time
-// with both compiled in, EMBR_TEST_BACKEND=vm|tree picks one at runtime (default: tree-walker)
-// tests/CMakeLists.txt registers every suite twice (<name>_tw / <name>_vm) using this
-inline bool useVmBackend() {
-#if defined(EMBR_WITH_TREE_WALKER) && defined(EMBR_WITH_VM)
+// these suites exercise language/stdlib behavior against one backend at a time. EMBR_TEST_BACKEND=<name> picks it
+// (a name from embr::backendNames(), the default backend if unset). tests/CMakeLists.txt registers every suite once
+// per backend (<name>_<backend>), so a new backend gets the whole matrix without touching the suites
+inline std::string backendName() {
     const char* e = std::getenv("EMBR_TEST_BACKEND");
-    return e && std::string(e) == "vm";
-#elif defined(EMBR_WITH_VM)
-    return true;
-#else
-    return false;
-#endif
+    return (e && *e) ? std::string(e) : embr::backendNames().front();
 }
+
+// compiles and runs one script on the VM. defined in harness_vm.cpp, once, so the suites that only run scripts don't each compile
+// the whole VM (that was most of the time a test took to build)
+void runSourceVm(const std::string& src, embr::Interpreter& interp, const std::string& filename);
 
 inline void runSourceAny(const std::string& src, embr::Interpreter& interp,
                          const std::string& filename) {
-#if defined(EMBR_WITH_TREE_WALKER) && defined(EMBR_WITH_VM)
-    if (useVmBackend()) embr::vm::runSource(src, interp, filename);
-    else                embr::runSource(src, interp, filename);
-#elif defined(EMBR_WITH_TREE_WALKER)
-    embr::runSource(src, interp, filename);
-#elif defined(EMBR_WITH_VM)
-    embr::vm::runSource(src, interp, filename);
-#endif
+    const std::string b = backendName();
+    // backend switch: a new backend needs its own case here (and a function like runSourceVm in harness_vm.cpp)
+    if (b == "vm") { runSourceVm(src, interp, filename); return; }
+    std::cerr << "embr tests: unknown EMBR_TEST_BACKEND '" << b << "'\n";
+    std::exit(2);
 }
 
 struct Test {
@@ -115,7 +111,29 @@ inline void printResult(const Result& r) {
     }
 }
 
-// runs tests against a fresh Interpreter that has already import()ed each name in plugins
+// a new Interpreter with the plugins in `plugins` already imported (their stderr banner is hidden). every test uses one of its
+// own: a variable's type is the type of its first value, and a global keeps it for as long as the interpreter lives, so tests
+// that reuse a name for different types can't share an interpreter
+inline std::unique_ptr<embr::Interpreter> freshInterpreter(const std::vector<std::string>& plugins) {
+    // a test may change EMBR_PATH (the module path tests do), and the plugins are found through it, so every interpreter
+    // starts from the value it had when the suite began
+    static const char* first = std::getenv("EMBR_PATH");
+    static const std::string saved = first ? first : "";
+    static const bool had = first != nullptr;
+#ifdef _WIN32
+    if (had) _putenv_s("EMBR_PATH", saved.c_str());
+#else
+    if (had) setenv("EMBR_PATH", saved.c_str(), 1);
+#endif
+    auto interp = std::make_unique<embr::Interpreter>();
+    std::ostringstream quiet;
+    std::streambuf* origErr = std::cerr.rdbuf(quiet.rdbuf());
+    for (const auto& p : plugins) runSourceAny("import \"" + p + "\"", *interp, "");
+    std::cerr.rdbuf(origErr);
+    return interp;
+}
+
+// runs each test against a fresh Interpreter that has already import()ed each name in plugins
 // individual Test::code strings should NOT re-import the same plugin
 // (the "[runtime] loaded plugin: " banner goes to stderr, which this harness does not capture, so a
 // re-import no longer pollutes the compared stdout -- it is just redundant work)
@@ -128,14 +146,14 @@ inline int runSuite(const std::string& suiteName,
     embr::enableAnsi();
 #endif
     std::cout << std::unitbuf;
-    embr::Interpreter interp;
-    for (const auto& p : plugins)
-        runSourceAny("import \"" + p + "\"", interp, "");
 
     int passed = 0, failed = 0;
     std::cout << "\n\033[1m " << suiteName << " \033[0m\n";
     for (const auto& t : tests) {
-        Result r = runTest(t, interp);
+        // every test gets an interpreter of its own. a variable's type is the type of its first value, and a global
+        // keeps it for as long as the interpreter lives, so tests that reuse a name for different types can't share one
+        auto interp = freshInterpreter(plugins);
+        Result r = runTest(t, *interp);
         printResult(r);
         r.passed ? ++passed : ++failed;
     }

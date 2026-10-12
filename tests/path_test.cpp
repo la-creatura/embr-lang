@@ -32,6 +32,14 @@ int main() {
           "print(path_is_abs(\"/x\"))\nprint(path_is_abs(\"x\"))\n"
           "print(path_relative(\"/a/b/c\", \"/a\"))\nprint(path_relative(\"/a/b\", \"/a/b\"))\n",
           "1\n0\nb/c\n.\n" },
+
+        // the answers are the ones std::filesystem gave (the first version of this plugin was built on it). these are the odd corners
+        { "path: repeated separators, a trailing separator, a root with two slashes",
+          "print(path_join(\"//\", \"x\"))\nprint(path_join(\"/\", \"/x\"))\nprint(path_join(\"a//b//\", \"\"))\n"
+          "print(path_join(\"a//b\", \"c///d/\"))\nprint(path_dirname(\"//x/y\"))\nprint(path_dirname(\"a//b\"))\n"
+          "print(path_relative(\"a/b/\", \"a\"))\nprint(path_relative(\"a\", \"a/b\"))\n"
+          "print(path_normalize(\"a/b/..\"))\nprint(path_normalize(\"/../a\"))\n",
+          "//x\n/x\na/b/\na/b/c/d/\n/x\na\nb/\n..\na\n/a\n" },
     };
     return embr_test::runSuite("path plugin test suite", tests, {"path"});
 }

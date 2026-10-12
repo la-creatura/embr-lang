@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "embr package registry index",
+  "description": "the index.json that `embr pkg` reads from <registry>/index.json. check_registry.py also checks what a schema cannot say: that latest and every dependency exist in the index.",
+  "type": "object",
+  "additionalProperties": { "$ref": "#/$defs/package" },
+  "$defs": {
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "capability": { "enum": ["filesystem", "network", "process", "env", "threads", "native"] },
+    "package": {
+      "type": "object",
+      "required": ["versions"],
+      "properties": {
+        "latest": { "$ref": "#/$defs/version" },
+        "versions": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/version" },
+          "additionalProperties": { "$ref": "#/$defs/release" }
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1, "description": "embr (a script module, goes to modules/), plugin (a native library, goes to plugins/), anything else (vendor/)" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" },
+        "description": { "type": "string" },
+        "capabilities": { "type": "array", "items": { "$ref": "#/$defs/capability" }, "uniqueItems": true },
+        "deps": { "type": "object", "additionalProperties": { "$ref": "#/$defs/version" } }
+      }
+    }
+  }
+}

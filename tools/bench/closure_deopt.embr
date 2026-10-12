@@ -1,0 +1,12 @@
+# the loop benchmark, plus one closure that is made once and never used.
+# slower than loop.embr means making a closure slows every other variable access.
+f = fn()
+    return 0
+end
+total = 0
+i = 0
+while i < 3000000
+    total = total + i % 7
+    i = i + 1
+end
+print(total)

@@ -21,6 +21,29 @@ int main() {
           "print(math_min(3, 7))\nprint(math_max(3, 7))\nprint(math_clamp(15, 0, 10))\nprint(math_clamp(-5, 0, 10))\nprint(math_clamp(5, 0, 10))\n",
           "3\n7\n10\n0\n5\n" },
 
+        { "abs, floor, ceil, round, min, max, clamp are overload groups: ints give an int, floats a float, a mix a number",
+          "print(type(math_abs(-3)), type(math_abs(-3.5)), type(math_floor(4)), type(math_min(2, 9)), type(math_max(1.5, 0.5)))\n"
+          "print(math_min(2, 2.5), type(math_min(2, 2.5)), math_clamp(-5.5, 0, 10))\n"
+          "n = 0\n"
+          "n = math_abs(n - 5)\n"
+          "print(n, type(n))\n"
+          "print(math_abs__1(-4), math_abs__2(-4.5), math_clamp__3(1.5, 0, 1))\n"
+          "f = math_max\n"
+          "print(f(3, 8), f(3.5, 1))\n",
+          "int number int int number\n2 int 0\n5 int\n4 4.5 1\n8 3.5\n" },
+        { "math overload groups: the errors (no int absolute value for the smallest int, no member for a string)",
+          "xs = json_parse(\"[-9223372036854775807, \\\"s\\\"]\")\n"
+          "try\n"
+          "  print(math_abs(xs[0] - 1))\n"
+          "catch e\n"
+          "  print(e[\"message\"])\n"
+          "end\n"
+          "try\n"
+          "  print(math_abs(xs[1]))\n"
+          "catch e\n"
+          "  print(e[\"message\"])\n"
+          "end\n",
+          "the smallest int has no int absolute value\nno overload of 'math_abs' takes (string); candidates: math_abs__1(int), math_abs__2(number)\n" },
         { "math_clamp: raises when lo > hi",
           "try\nmath_clamp(5, 10, 0)\nprint(\"unreachable\")\ncatch e\nprint(\"caught\")\nend\n",
           "caught\n" },
@@ -58,5 +81,5 @@ int main() {
           "x = math_randint(5, 5)\nprint(x)\n",
           "hi rejected\nseed rejected\n5\n" },
     };
-    return embr_test::runSuite("embrmath plugin test suite", tests, {"embrmath"});
+    return embr_test::runSuite("embrmath plugin test suite", tests, {"embrmath", "embrlib", "json"});
 }

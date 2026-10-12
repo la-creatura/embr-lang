@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """checks that the docs (the wiki) still tell the truth. CTest runs this (docs_examples).
 
-  python3 tools/docs/check_wiki.py --embr bin/linux/embr --include build/linux-vm-debug/generated
+  python3 tools/docs/check_wiki.py --embr bin/linux/embr --include build/linux-debug/generated
 
 the docs live in the GitHub wiki (la-creatura/embr-lang.wiki), not in this repo, so this needs a clone of it:
 pass --wiki DIR, set EMBR_WIKI_DIR, or just init the submodule (git submodule update --init), which is
@@ -17,6 +17,11 @@ what it checks
   - a few numbers the wiki states (keyword count, call depth, nesting depth) are compared to the source.
   - every plugin in plugins/ and every module in modules/ has a wiki page, listed in plugin-reference
     (or script-modules) and in import-name-index.
+  - what each script module in modules/ says about itself (`embr module FILE --json`) matches its wiki page, the same way:
+    it declares a version and description, has no problems, every public function has a doc comment and is named on the page.
+  - what each plugin says about itself (`embr plugin NAME --json`) matches its wiki page: the plugin describes itself
+    (version, description), every function it binds has a doc line, every function is named on the page, every
+    function-looking name in the page's tables exists, and a plugin that needs a capability says so on its page.
 """
 import argparse, pathlib, re, subprocess, sys, tempfile, os
 
@@ -92,12 +97,13 @@ def check_numbers(wiki):
     lex, overview = page("lexical-grammar"), page("overview")
     scoping, types = page("scoping-and-closures"), page("type-system")
     lexer = (root / "include/embr/core/lexer.h").read_text()
-    kw = re.findall(r'\{"(\w+)",TokenType::', lexer[lexer.index("Token lexIdent"):lexer.index("Token lexNum")])
+    kw = re.findall(r'\{"(\w+)",TokenType::', lexer[lexer.index("keywordTable()"):lexer.index("class Lexer")])
     m = re.search(r"### reserved keywords \((\d+)\)", lex)
     if not m or int(m.group(1)) != len(kw):
         fail("lexical-grammar", f"says {m.group(1) if m else '?'} reserved keywords, lexer has {len(kw)}")
-    if re.search(r"18 reserved keywords", overview) and len(kw) != 18:
-        fail("overview", f"says 18 keywords, lexer has {len(kw)}")
+    mo = re.search(r"(\d+) reserved keywords", overview)
+    if mo and int(mo.group(1)) != len(kw):
+        fail("overview", f"says {mo.group(1)} keywords, lexer has {len(kw)}")
     block = next((t for lang, t, _ in blocks_of(lex) if t.startswith("if  elif")), "")
     if set(block.split()) != set(kw):
         fail("lexical-grammar", f"keyword list differs from the lexer: {sorted(set(block.split()) ^ set(kw))}")
@@ -117,7 +123,7 @@ def check_pages(wiki):
         return f.read_text() if f.exists() else ""
     reference, modules, index = text("plugin-reference"), text("script-modules"), text("import-name-index")
     for d in sorted((root / "plugins").iterdir()):
-        if not (d / f"{d.name}.cpp").exists():
+        if not ((d / f"{d.name}.cpp").exists() or (d / f"{d.name}.c").exists()):
             continue
         n = d.name
         if n == "hello":
@@ -136,6 +142,108 @@ def check_pages(wiki):
             fail("script-modules", f"does not list `{n}.embr`")
         if f"| `{n}.embr` |" not in index:
             fail("import-name-index", f"has no row for `{n}.embr`")
+
+CAPS_WORD = {"filesystem": "filesystem", "network": "network", "process": "process", "env": "environment",
+             "threads": "thread", "native": "native"}
+
+def page_words(page):
+    """the page text, plus the names a shorthand like `math_sqrt/pow/sin` stands for, and a regex that finds a whole name."""
+    # a table may write several names with a shared start as `math_sqrt/pow/sin`: that names math_sqrt, math_pow, math_sin
+    for m in re.finditer(r"([a-z][a-z0-9_]*_)([a-z0-9]+(?:/[a-z0-9_]+)+)", page):
+        for tail in m.group(2).split("/"):
+            page += f" {m.group(1)}{tail} "
+    return page
+
+def names_on_page(where, names, groups, page, allow_calls=("len", "has")):
+    """every name is on the page, and every function-looking name in the first column of a table is one of `names`."""
+    words = lambda s: re.compile(r"(?<![A-Za-z0-9_])" + re.escape(s) + r"(?![A-Za-z0-9_])")
+    page = page_words(page)
+    known = set(names) | set(g for g in groups.values() if g)
+    for n in names:
+        if n.startswith("__"):
+            continue                       # a hook the language calls (len(v), v[i]), not a function a script names
+        if not words(n).search(page) and not (groups.get(n) and words(groups[n]).search(page)):
+            fail(where, f"the page never names `{n}`")
+    # the other way: a function-looking name in the first column of a table must be a real function
+    for line in page.split("\n"):
+        if not line.startswith("| ") or line.startswith("|---"):
+            continue
+        first = line.split("|")[1] if line.count("|") >= 2 else ""
+        for tick in re.findall(r"`([^`]*)`", first):
+            for m in re.finditer(r"(?<![A-Za-z0-9_/.])([a-z_][a-z0-9_]*)\(", tick):
+                if m.group(1) not in known and m.group(1) not in allow_calls:
+                    fail(where, f"the page lists `{m.group(1)}(...)` but it does not exist")
+
+def capabilities_on_page(where, caps, page):
+    for cap in caps:
+        if CAPS_WORD[cap] not in page.lower():
+            fail(where, f"it uses the {cap} capability but the page never says so")
+
+def check_plugin_metadata(embr, wiki):
+    """what a plugin says about itself (embr plugin NAME --json) against its wiki page."""
+    import json
+    ref_file = wiki / "plugin-reference.md"
+    reference = ref_file.read_text() if ref_file.exists() else ""
+    for d in sorted((root / "plugins").iterdir()):
+        n = d.name
+        if not ((d / f"{n}.cpp").exists() or (d / f"{n}.c").exists()) or n == "hello":
+            continue
+        where = f"plugin-{n}"
+        run = subprocess.run([embr, "plugin", n, "--json"], capture_output=True, text=True)
+        if run.returncode != 0:
+            fail(where, f"`embr plugin {n} --json` failed: {(run.stderr or run.stdout).strip()[:300]}")
+            continue
+        info = json.loads(run.stdout)
+        if not info.get("declared"):
+            fail(where, "the plugin does not describe itself (EMBR_PLUGIN_INFO / embr_plugin_info)")
+        if not info.get("version"):
+            fail(where, "the plugin has no version")
+        if len(info.get("description", "")) < 8:
+            fail(where, "the plugin has no description")
+        page_file = wiki / f"plugin-{n}.md"
+        page = page_file.read_text() if page_file.exists() else ""
+        for f in info["functions"]:
+            if not f["bound"]:
+                fail(where, f"the plugin documents `{f['name']}` but does not bind it")
+            if not f["doc"].strip():
+                fail(where, f"`{f['name']}` has no doc line in the plugin's description")
+        names_on_page(where, [f["name"] for f in info["functions"]], {f["name"]: f["group"] for f in info["functions"]}, page)
+        capabilities_on_page(where, info["capabilities"] + info["optional_capabilities"], page)
+        # the list on plugin-reference says what the plugin needs, in brackets after its line
+        line = next((l for l in reference.split("\n") if f"](plugin-{n})" in l), "")
+        m = re.search(r"\(needs ([^)]*)\)", line)
+        listed = sorted(c.strip() for c in m.group(1).split(",")) if m else []
+        if listed != sorted(info["capabilities"]):
+            fail("plugin-reference", f"the line for `{n}` says it needs {listed or 'nothing'}, the plugin says {sorted(info['capabilities']) or 'nothing'}")
+        if info["optional_capabilities"] and "when allowed" not in line:
+            fail("plugin-reference", f"the line for `{n}` does not say it uses {info['optional_capabilities']} when allowed")
+
+def check_module_metadata(embr, wiki):
+    """what a script module says about itself (embr module FILE --json) against its wiki page."""
+    import json
+    for f in sorted((root / "modules").glob("*.embr")):
+        n = f.stem
+        where = f"module-{n}-embr"
+        run = subprocess.run([embr, "module", str(f), "--json"], capture_output=True, text=True)
+        if run.returncode != 0 and not run.stdout.strip():
+            fail(where, f"`embr module {f.name} --json` failed: {(run.stderr or run.stdout).strip()[:300]}")
+            continue
+        info = json.loads(run.stdout)
+        if not info.get("declared"):
+            fail(where, f"modules/{f.name} has no `__module__` declaration")
+        if not info.get("version"):
+            fail(where, "the module declares no version")
+        if len(info.get("description", "")) < 8:
+            fail(where, "the module declares no description")
+        for p in info.get("problems", []):
+            fail(where, f"the module has a problem: {p}")
+        for fn in info["functions"]:
+            if not fn["doc"].strip():
+                fail(where, f"`{fn['name']}` has no comment above it to use as a doc line")
+        page_file = wiki / f"module-{n}-embr.md"
+        page = page_file.read_text() if page_file.exists() else ""
+        names_on_page(where, [fn["name"] for fn in info["functions"]], {}, page)
+        capabilities_on_page(where, info["capabilities"], page)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -157,13 +265,15 @@ def main():
     a.embr = str(pathlib.Path(a.embr).resolve())
     a.include = str(pathlib.Path(a.include).resolve())
     version = subprocess.run([a.embr, "--version"], capture_output=True, text=True).stdout
-    backends = []
-    if "tree-walker" in version: backends.append(("tree", []))
-    if "vm" in version.split("backends:")[-1]: backends.append(("vm", ["--vm"]))
+    # "embr 1.0.0 (build/linux-debug; backends: vm)" -> every listed backend runs every example
+    names = [n.strip() for n in version.split("backends:")[-1].rstrip(")\n ").split(",") if n.strip()]
+    backends = [(n, [f"--backend={n}"]) for n in names]
     for doc in sorted(wiki.glob("*.md")):
         check_blocks(doc, a.embr, a.include, backends)
     check_numbers(wiki)
     check_pages(wiki)
+    check_plugin_metadata(a.embr, wiki)
+    check_module_metadata(a.embr, wiki)
     if failures:
         print("\n\n".join(failures)); sys.exit(1)
     print("docs examples ok")

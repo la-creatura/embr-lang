@@ -1,0 +1,38 @@
+# a plugin written in C (examples/hello_c/hello_c.c)
+import "embrlib"
+import "hello_c"
+
+print(hc_twice(21))
+print(hc_join(["a", "b", "c"], "-"))
+print(hc_join(["x", "y"]))
+c = hc_counter()
+hc_counter_add(c, 5)
+hc_counter_add(c, 2)
+print(hc_counter_get(c))
+m = hc_pair(7)
+print(m["n"], m["square"])
+
+print(hc_chars("abc"))
+print(hc_kinds([1, 2.5, "x", [1], {"a": 1}]))
+print(hc_loads())
+print(hc_upper("héllo wörld"))
+print(hc_show([1, "a", 2.5, {"k": 2}]))
+print(hc_show(2.50), hc_show(-7), hc_show("txt"))
+
+# an error from C is an ordinary error a script can catch
+try
+    hc_fail("nope")
+catch e
+    print("caught:", e["message"])
+end
+try
+    hc_join([1, 2])
+catch e
+    print("caught:", e["message"])
+end
+# a pointer that did not come from the plugin is refused
+try
+    hc_counter_get(hc_counter)
+catch e
+    print("caught a wrong handle")
+end

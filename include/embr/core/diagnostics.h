@@ -113,9 +113,10 @@ struct EmbrError : std::runtime_error {
     // an error without matching the message text
     std::string context;
     // call stack, innermost call first, filled in as the error unwinds out of script functions (the
-    // tree-walker's doInvoke and the VM's handleTry both append one frame per function they unwind
-    // through, so both backends produce the same list). script natives/builtins are not frames.
+    // VM's handleTry appends one frame per function it unwinds through). script natives/builtins are not frames.
     std::vector<TraceFrame> trace;
+    // an error a script must not be able to catch (the step or time limit ran out). try / catch skips it
+    bool fatal = false;
     explicit EmbrError(const std::string& formatted, bool loc = false, SourceRange r = {},
                         std::string raw = {}, std::string ctx = {})
         : std::runtime_error(formatted), hasLocation(loc), range(r),

@@ -1,22 +1,63 @@
 {
   "name": "embr-language",
   "displayName": "embr",
-  "description": "Syntax highlighting and basic editing support for the embr scripting language (.embr)",
+  "description": "Syntax highlighting and editor support (errors, go to definition, rename, hover, completion) for the embr scripting language (.embr)",
   "version": "0.1.0",
+  "icon": "icon.png",
   "publisher": "embr",
-  "engines": { "vscode": "^1.60.0" },
-  "categories": ["Programming Languages"],
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "embr",
-        "aliases": ["embr", "Embr"],
-        "extensions": [".embr"],
-        "configuration": "./language-configuration.json"
+        "aliases": [
+          "embr",
+          "Embr"
+        ],
+        "extensions": [
+          ".embr"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icon-language.svg",
+          "dark": "./icon-language.svg"
+        }
       }
     ],
     "grammars": [
-      { "language": "embr", "scopeName": "source.embr", "path": "./syntaxes/embr.tmLanguage.json" }
+      {
+        "language": "embr",
+        "scopeName": "source.embr",
+        "path": "./syntaxes/embr.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "embr",
+      "properties": {
+        "embr.path": {
+          "type": "string",
+          "default": "embr",
+          "description": "the embr program that runs the language server (embr lsp). a full path, or a name on your PATH"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "embr.restartServer",
+        "title": "embr: restart the language server"
+      }
     ]
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:embr"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }

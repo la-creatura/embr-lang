@@ -1,0 +1,15 @@
+# native overload groups whose member is picked before the script runs: every argument has one known type, so each
+# call goes straight to math_abs__1, math_min__1, math_max__2, ... with no dispatch. 300k turns, about 1.5M calls
+import "embrlib"
+import "embrmath"
+acc = 0
+facc = 0.0
+x = 0.5
+i = 0
+while i < 300000
+    acc = acc + math_abs(i) + math_min(i, 1000) + math_clamp(i, 0, 99)
+    facc = facc + math_max(x, 0.25) + math_floor(x)
+    i = i + 1
+end
+print(acc)
+print(facc)

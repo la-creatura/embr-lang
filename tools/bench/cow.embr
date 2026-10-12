@@ -1,0 +1,29 @@
+# passing a big array to a function, reading it in a loop, and for-in. each used to copy the whole array
+import "embrlib"
+
+big = []
+i = 0
+while i < 20000
+    append(&big, i)
+    i += 1
+end
+
+fn first(a)
+    return a[0]
+end
+
+total = 0
+j = 0
+while j < 20000
+    total = total + first(big) + len(big)
+    j += 1
+end
+
+k = 0
+while k < 3
+    k += 1
+    for x in big
+        total = total + 1
+    end
+end
+print(total)

@@ -24,6 +24,7 @@ function(add_embr_module name)
     install(FILES "${src}" DESTINATION lib/embr/modules)
 endfunction()
 
+add_embr_module(cheader)
 add_embr_module(ffi)
 add_embr_module(parallel)
 add_embr_module(pkg)

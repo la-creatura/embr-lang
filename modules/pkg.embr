@@ -5,18 +5,30 @@
 # usage (as a library)
 #   import "pkg.embr"
 #   pkg_configure({"registry_url": "http://localhost:8931"})
-#   pkg_install("foo")                 # installs the "latest" version
+#   pkg_install("foo")                 # installs the "latest" version, and what it depends on
 #   pkg_install("foo", "1.0.0")        # installs an exact version
+#   pkg_install_project()              # installs everything embr.json lists, from embr.lock when it is up to date
 #   print(pkg_list())                  # installed name -> {version, type, ...}
 #   pkg_remove("foo")
 #
-# usage (from the CLI, once wired into cli.cpp)
+# usage (from the CLI)
 #   embr pkg --registry http://localhost:8931 install foo
 #   embr pkg --registry http://localhost:8931 install foo 1.0.0
+#   embr pkg --registry file:///srv/registry install    # every dependency in embr.json
 #   embr pkg list
 #   embr pkg remove foo
 #
-# registry protocol
+# the project file and the lockfile
+#   embr.json   {"dependencies": {"foo": "1.0.0"}}. `install foo` adds foo at the exact version it picked, so the
+#               file stays exact. a hand-written "latest" or ">=X.Y.Z" is allowed and is pinned by the lockfile
+#   embr.lock   what was picked: every package with its exact version, url, sha256 and type, plus a copy of the
+#               dependencies it was made for. `install` with no name uses it as long as embr.json still says the same,
+#               so a fresh checkout gets the same files (a download whose sha256 differs from the lock is refused)
+#   a version in the registry can list "deps": {"bar": "2.0.0"}, exact versions only. they are installed with it. two
+#   packages that need different versions of one package is an error that names both
+#
+# registry protocol (the rules are written down in tools/pkg/registry.schema.json, and
+#   `python3 tools/pkg/check_registry.py index.json` checks an index against them)
 #   a registry is anything that serves GET <registry_url>/index.json, a JSON document like:
 #     {
 #       "<package name>": {
@@ -32,11 +44,19 @@
 #     host artifacts itself at a relative path, or point at a real git host's release download url
 #     ("https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>", or a source snapshot like
 #     ".../archive/refs/tags/<tag>.tar.gz"). https works because the http plugin is built with TLS by default
-#   - "type" says where an installed artifact goes: "embr" (a script module) -> ./modules/, "plugin" (a native
+#   - "type" says where an installed artifact goes: "package" (a .pmbr file, see `embr package`) -> ./packages/, "embr" (a script module) -> ./modules/, "plugin" (a native
 #     .so/.dll) -> ./plugins/. those are where `import` already looks (fileCandidates in core/module.h), so a package
 #     of either kind can be imported right after install. anything else ("asset": a release tarball, a vendored C
 #     header, ...) goes to ./vendor/
 #   - "sha256" is optional. if present, a download that doesn't match is rejected (not installed, not cached)
+#   - "capabilities" and "description" are optional. "capabilities" is what the registry says the artifact needs (a list of
+#     filesystem, network, process, env, threads, native). for a script module (type "embr") the downloaded file is read
+#     before it is installed (nothing in it is run) and must not need more than the registry says, and pkg_configure's
+#     "deny_caps" (or `--deny-caps=a,b` on the command line) refuses a package that needs a denied capability. a native
+#     plugin is never opened before it is installed (opening one runs its start-up code), so for type "plugin" only the
+#     registry's claim can be checked, and a host that denies capabilities refuses a plugin the registry gives no claim for
+#   - a registry can also be a folder: registry_url "file:///path/to/registry" reads index.json and the artifacts from
+#     there, for an offline mirror or a test
 #
 # caching and re-installs
 #   every successful download is written to the cache_dir in __pkg_config as "<name>-<version>" before it is copied
@@ -47,24 +67,40 @@
 # the double-underscore helpers below are plain top-level bindings, not `local`: __pkg_config is one shared mutable
 # registry that several exported functions read and write (see the note in modules/ffi.embr)
 
+__module__ = {
+    "version": "1.0.0",
+    "description": "a small package manager: install, list and remove packages from a registry",
+    "capabilities": ["filesystem", "network"],
+}
+
 import "http"
 import "json"
 import "fs"
 import "str"
 import "embrlib"
+import "embrmeta"
+import "pmbr"
 
 __pkg_config = {
     "registry_url": "",
     "cache_dir": "pkg_cache",
     "plugins_dir": "plugins",
     "modules_dir": "modules",
+    "packages_dir": "packages",
     "vendor_dir": "vendor",
     "manifest_path": "pkg_installed.json",
+    "project_path": "embr.json",
+    "lock_path": "embr.lock",
+    "deny_caps": [],
+    "require_signed": 0,
+    "trusted_keys": [],
+    "allow_signer_change": 0,
 }
 
 # pkg_configure(opts: map) -> 0
 # merges opts into the module's config. keys: registry_url, cache_dir, plugins_dir, modules_dir, vendor_dir,
-# manifest_path. see the __pkg_config initializer above for the defaults, and the header for what registry_url must serve
+# manifest_path, project_path, lock_path, deny_caps (an array of capability names a package may not need), require_signed (1: only packages signed by a trusted key), trusted_keys (more public keys, hex, to trust), allow_signer_change (1: accept a changed signer and pin the new one). see the
+# __pkg_config initializer above for the defaults, and the header for what registry_url must serve
 fn pkg_configure(opts)
     __pkg_config = map_merge(__pkg_config, opts)
     return 0
@@ -81,7 +117,7 @@ fn __pkg_resolve_url(url)
     if str_startswith(url, "http://") or str_startswith(url, "https://")
         return url
     end
-    base = __pkg_config["registry_url"]
+    local base = __pkg_config["registry_url"]
     if str_endswith(base, "/")
         base = slice(base, 0, len(base) - 1)
     end
@@ -91,10 +127,26 @@ fn __pkg_resolve_url(url)
     return base + url
 end
 
+# a file:// url is a path on this machine (a registry kept in a folder)
+fn __pkg_local_path(url)
+    if str_startswith(url, "file://")
+        return slice(url, 7, len(url))
+    end
+    return ""
+end
+
 # pkg_fetch_index() -> map  (the registry's parsed index.json)
 fn pkg_fetch_index()
     __pkg_require_registry()
-    r = http_get(__pkg_resolve_url("/index.json"))
+    local url = __pkg_resolve_url("/index.json")
+    local localPath = __pkg_local_path(url)
+    if localPath != ""
+        if !fs_exists(localPath)
+            error("pkg: no registry index at " + localPath)
+        end
+        return json_parse(load_file(localPath))
+    end
+    local r = http_get(url)
     if r["ok"] != 1
         error("pkg: failed to fetch registry index (status " + str(r["status"]) + ")")
     end
@@ -105,11 +157,11 @@ end
 # missing or non-numeric component reads as 0, so comparisons never raise on
 # a loosely-formed version, they just treat it as sorting low.
 fn __pkg_semver_parts(v)
-    parts = str_split(v, ".")
-    out = [0, 0, 0]
-    i = 0
+    local parts = str_split(v, ".")
+    local out = [0, 0, 0]
+    local i = 0
     while i < len(parts) and i < 3
-        p = parts[i]
+        local p = parts[i]
         if str_isdigit(p)
             out[i] = num(p)
         end
@@ -120,9 +172,9 @@ end
 
 # -1/0/1 comparator, ascending
 fn __pkg_semver_cmp(a, b)
-    pa = __pkg_semver_parts(a)
-    pb = __pkg_semver_parts(b)
-    i = 0
+    local pa = __pkg_semver_parts(a)
+    local pb = __pkg_semver_parts(b)
+    local i = 0
     while i < 3
         if pa[i] < pb[i]
             return -1
@@ -140,7 +192,7 @@ fn pkg_versions(index, name)
     if !has(index, name)
         error("pkg: unknown package '" + name + "'")
     end
-    vs = keys(index[name]["versions"])
+    local vs = keys(index[name]["versions"])
     return sort_do(vs, fn(v) return __pkg_semver_parts(v)[0] * 1000000 + __pkg_semver_parts(v)[1] * 1000 + __pkg_semver_parts(v)[2] end)
 end
 
@@ -152,8 +204,8 @@ fn pkg_resolve(index, name, spec)
     if !has(index, name)
         error("pkg: unknown package '" + name + "'")
     end
-    entry = index[name]
-    versions = pkg_versions(index, name)
+    local entry = index[name]
+    local versions = pkg_versions(index, name)
 
     if spec == "" or spec == "latest"
         if has(entry, "latest") and has(entry["versions"], entry["latest"])
@@ -163,7 +215,7 @@ fn pkg_resolve(index, name, spec)
     end
 
     if str_startswith(spec, ">=")
-        floor = str_strip(slice(spec, 2, len(spec)))
+        local floor = str_strip(slice(spec, 2, len(spec)))
         for v in versions
             if __pkg_semver_cmp(v, floor) >= 0
                 return v
@@ -184,7 +236,7 @@ end
 __pkg_double_exts = [".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"]
 
 fn __pkg_extname(url)
-    lower = str_lower(url)
+    local lower = str_lower(url)
     for suf in __pkg_double_exts
         if str_endswith(lower, suf)
             return slice(url, len(url) - len(suf), len(url))
@@ -194,7 +246,7 @@ fn __pkg_extname(url)
 end
 
 fn __pkg_cache_file(name, version, url)
-    ext = __pkg_extname(url)
+    local ext = __pkg_extname(url)
     return fs_join(__pkg_config["cache_dir"], name + "-" + version + ext)
 end
 
@@ -204,6 +256,9 @@ fn __pkg_install_dir(kind)
     end
     if kind == "embr"
         return __pkg_config["modules_dir"]
+    end
+    if kind == "package"
+        return __pkg_config["packages_dir"]
     end
     return __pkg_config["vendor_dir"]
 end
@@ -218,8 +273,8 @@ end
 # than silently installing untrusted content.
 fn pkg_download(name, version, versionEntry)
     fs_mkdir(__pkg_config["cache_dir"], 1)
-    cachePath = __pkg_cache_file(name, version, versionEntry["url"])
-    wantSha = ""
+    local cachePath = __pkg_cache_file(name, version, versionEntry["url"])
+    local wantSha = ""
     if has(versionEntry, "sha256")
         wantSha = versionEntry["sha256"]
     end
@@ -231,15 +286,23 @@ fn pkg_download(name, version, versionEntry)
         # stale/corrupt cache entry, fall through and re-download
     end
 
-    url = __pkg_resolve_url(versionEntry["url"])
-    r = http_download(url, cachePath)
-    if r["ok"] != 1
-        fs_remove(cachePath)
-        error("pkg: download failed for " + name + "@" + version + " (status " + str(r["status"]) + ")")
+    local url = __pkg_resolve_url(versionEntry["url"])
+    local localPath = __pkg_local_path(url)
+    if localPath != ""
+        if !fs_exists(localPath)
+            error("pkg: download failed for " + name + "@" + version + " (no file at " + localPath + ")")
+        end
+        write_file(cachePath, load_file(localPath))
+    else
+        local r = http_download(url, cachePath)
+        if r["ok"] != 1
+            fs_remove(cachePath)
+            error("pkg: download failed for " + name + "@" + version + " (status " + str(r["status"]) + ")")
+        end
     end
 
     if wantSha != ""
-        gotSha = http_sha256(load_file(cachePath))
+        local gotSha = http_sha256(load_file(cachePath))
         if gotSha != wantSha
             fs_remove(cachePath)
             error("pkg: checksum mismatch for " + name + "@" + version + " (expected " + wantSha + ", got " + gotSha + ")")
@@ -248,44 +311,349 @@ fn pkg_download(name, version, versionEntry)
     return cachePath
 end
 
+# a package file says what it requires (meta.embr), the registry says what to install with it ("deps"): they must agree, or the
+# registry would install a package without the things it needs. raises if the file requires something the registry does not list
+fn __pkg_check_requires(name, version, versionEntry, cachePath)
+    local who = name + "@" + version
+    local deps = {}
+    if has(versionEntry, "deps")
+        deps = versionEntry["deps"]
+    end
+    local m = pmbr_meta(cachePath)
+    for rn, rv in m["requires"]
+        if !has(deps, rn) or deps[rn] != rv
+            error("pkg: " + who + " requires " + rn + " " + rv + " but the registry does not list that as a dependency")
+        end
+    end
+    return 0
+end
+
+# with require_signed set, only a package signed by a trusted key is installed. the key is trusted when it is in the user's trust list
+# (`embr trust`), in the trusted_keys of this project's embr.json, or in pkg_configure's "trusted_keys". a script module or a plugin cannot
+# be signed, so they are refused. a package with a signature that does not match is refused always (pmbr_meta reports it as a problem)
+fn __pkg_check_signature(name, version, kind, cachePath)
+    local who = name + "@" + version
+    if __pkg_config["require_signed"] == 0
+        return 0
+    end
+    if kind != "package"
+        error("pkg: " + who + " is a " + kind + ", which cannot be signed, and signed packages are required")
+    end
+    local m = pmbr_meta(cachePath)
+    if m["signed"] == 0
+        error("pkg: " + who + " is not signed, and signed packages are required")
+    end
+    if m["trusted"] == 0 and index_of(__pkg_config["trusted_keys"], m["signer"]) < 0
+        error("pkg: " + who + " is signed by the key " + slice(m["signer"], 0, 16) + "..., which is not trusted (embr trust, or trusted_keys in embr.json)")
+    end
+    return 0
+end
+
+# the key (hex) that signed a package, or "" for an unsigned one. a script module or a plugin file is never signed: "-"
+fn __pkg_signer_of(kind, cachePath)
+    if kind != "package"
+        return "-"
+    end
+    return pmbr_meta(cachePath)["signer"]
+end
+
+fn __pkg_signer_text(signer)
+    if signer == ""
+        return "unsigned"
+    end
+    return "signed by the key " + slice(signer, 0, 16) + "..."
+end
+
+# a package keeps the signer it was first installed with (the manifest remembers it, and so does embr.lock). a package that comes from the
+# registry signed by another key, or unsigned after it was signed, or signed after it was not, is refused: the publisher may have lost a key,
+# or somebody else is publishing under that name. allow_signer_change (--allow-signer-change) accepts it and pins the new signer
+fn __pkg_check_pin(name, version, versionEntry, signer)
+    if signer == "-" or __pkg_config["allow_signer_change"] == 1
+        return 0
+    end
+    local who = name + "@" + version
+    if has(versionEntry, "signer") and versionEntry["signer"] != signer
+        error("pkg: " + who + " is " + __pkg_signer_text(signer) + " but embr.lock says it was " + __pkg_signer_text(versionEntry["signer"]) + ". remove embr.lock to resolve again, or use --allow-signer-change")
+    end
+    local manifest = pkg_load_manifest()
+    if has(manifest, name) and has(manifest[name], "signer") and manifest[name]["signer"] != signer
+        error("pkg: " + name + " was " + __pkg_signer_text(manifest[name]["signer"]) + " when you installed it, and " + who + " is " + __pkg_signer_text(signer) + ". if the publisher changed keys on purpose, install it again with --allow-signer-change")
+    end
+    return 0
+end
+
+# what an artifact needs, checked before it is installed. a script module is read from its cached file (nothing in it runs,
+# and the plugins it imports are looked up only in places the host controls): its own capabilities must be within what the
+# registry claims, if the registry claims anything. a native plugin is not opened, so only the registry's claim is known.
+# raises if the package needs a capability in deny_caps, or if a plugin's capabilities cannot be known and some are denied.
+# returns the capabilities it needs
+fn __pkg_check_caps(name, version, versionEntry, kind, cachePath)
+    local who = name + "@" + version
+    local denied = __pkg_config["deny_caps"]
+    local hasClaim = has(versionEntry, "capabilities")
+    local claimed = []
+    if hasClaim
+        claimed = versionEntry["capabilities"]
+    end
+    local actual = claimed
+    if kind == "embr" or kind == "package"
+        local m = {}
+        local what = "module"
+        if kind == "embr"
+            m = meta_module_file(cachePath)
+        else
+            what = "package"
+            m = pmbr_meta(cachePath)
+            if m["name"] != name and len(m["problems"]) == 0
+                error("pkg: the package file for " + who + " calls itself " + m["name"])
+            end
+        end
+        for p in m["problems"]
+            error("pkg: " + who + " is not a well-formed " + what + ": " + p)
+        end
+        actual = m["capabilities"]
+        if hasClaim
+            for c in actual
+                if index_of(claimed, c) < 0
+                    error("pkg: the registry says " + who + " needs [" + join(claimed, ", ") + "] but the file also needs " + c)
+                end
+            end
+        end
+    elif kind == "plugin" and !hasClaim and len(denied) > 0
+        error("pkg: " + who + " is a native plugin and the registry does not say what it needs, so it cannot be checked against --deny-caps")
+    end
+    for c in actual
+        if index_of(denied, c) >= 0
+            error("pkg: " + who + " needs " + c + ", which is denied")
+        end
+    end
+    return actual
+end
+
+# pkg_load_manifest() -> map the installed-package manifest read from disk ({} when there is none)
 fn pkg_load_manifest()
-    path = __pkg_config["manifest_path"]
+    local path = __pkg_config["manifest_path"]
     if !fs_exists(path)
         return {}
     end
     return json_parse(load_file(path))
 end
 
+# pkg_save_manifest(m: map) -> 0 writes the installed-package manifest
 fn pkg_save_manifest(m)
     write_file(__pkg_config["manifest_path"], json_stringify(m, 2))
     return 0
 end
 
-# pkg_install(name: str, spec?: str) -> map {name, version, type, path}
-# resolves spec against the registry index, downloads or reuses the cached artifact, copies it into plugins/ or
-# modules/ (per its "type"), and records it in the manifest. running it again with the same (name, spec) is cheap:
-# the cache check in pkg_download() skips the network when a valid copy already exists
-fn pkg_install(name, spec)
-    index = pkg_fetch_index()
-    version = pkg_resolve(index, name, spec)
-    versionEntry = index[name]["versions"][version]
-    kind = "embr"
+# downloads (or reuses the cached copy of) one exact version and copies it into plugins/, modules/ or vendor/, then
+# records it in the manifest. versionEntry is the registry's entry for that version, or a lockfile entry (same keys)
+fn __pkg_install_one(name, version, versionEntry)
+    local kind = "embr"
     if has(versionEntry, "type")
         kind = versionEntry["type"]
     end
 
-    cachePath = pkg_download(name, version, versionEntry)
+    local cachePath = pkg_download(name, version, versionEntry)
+    __pkg_check_caps(name, version, versionEntry, kind, cachePath)
+    __pkg_check_signature(name, version, kind, cachePath)
+    local signer = __pkg_signer_of(kind, cachePath)
+    __pkg_check_pin(name, version, versionEntry, signer)
+    if kind == "package"
+        __pkg_check_requires(name, version, versionEntry, cachePath)
+    end
 
-    ext = __pkg_extname(versionEntry["url"])
-    destPath = __pkg_install_file(name, kind, ext)
+    local ext = __pkg_extname(versionEntry["url"])
+    local destPath = __pkg_install_file(name, kind, ext)
     fs_mkdir(__pkg_install_dir(kind), 1)
     write_file(destPath, load_file(cachePath))
 
-    manifest = pkg_load_manifest()
+    local manifest = pkg_load_manifest()
     manifest[name] = {"version": version, "type": kind, "path": destPath}
+    if signer != "-"
+        manifest[name]["signer"] = signer
+    end
     pkg_save_manifest(manifest)
-
     return manifest[name]
+end
+
+# pkg_resolve_all(index: map, wants: map name -> spec) -> map name -> version
+# picks a version for every wanted package and, through the "deps" of each picked version, for everything they need.
+# a dependency names an exact version. the same package needed at two different versions raises, naming who wants which
+fn pkg_resolve_all(index, wants)
+    local picked = {}
+    local by = {}
+    local queue = []
+    for n, spec in wants
+        queue = push(queue, [n, spec, "the project"])
+    end
+    local i = 0
+    while i < len(queue)
+        local item = queue[i]
+        i = i + 1
+        local n = item[0]
+        local who = item[2]
+        local v = pkg_resolve(index, n, item[1])
+        if has(picked, n)
+            if picked[n] != v
+                error("pkg: '" + n + "' is needed at " + picked[n] + " by " + by[n] + " and at " + v + " by " + who)
+            end
+        else
+            picked[n] = v
+            by[n] = who
+            local entry = index[n]["versions"][v]
+            if has(entry, "deps")
+                for dn, ds in entry["deps"]
+                    if ds == "" or ds == "latest" or str_startswith(ds, ">=")
+                        error("pkg: " + n + "@" + v + " depends on '" + dn + "' at '" + ds + "': a dependency must name an exact version")
+                    end
+                    queue = push(queue, [dn, ds, n + "@" + v])
+                end
+            end
+        end
+    end
+    return picked
+end
+
+fn __pkg_load_json(path)
+    if !fs_exists(path)
+        return {}
+    end
+    return json_parse(load_file(path))
+end
+
+# pkg_load_project() -> map (embr.json, {} when there is none)
+fn pkg_load_project()
+    local p = __pkg_load_json(__pkg_config["project_path"])
+    if !has(p, "dependencies")
+        p["dependencies"] = {}
+    end
+    return p
+end
+
+# installs every package in picked (name -> version) from the index, and writes the lockfile for `deps`
+fn __pkg_install_picked(index, picked, deps)
+    local lockPkgs = {}
+    for n, v in picked
+        local entry = index[n]["versions"][v]
+        local installed = __pkg_install_one(n, v, entry)
+        local locked = {"version": v, "url": entry["url"], "type": "embr"}
+        if has(installed, "signer")
+            locked["signer"] = installed["signer"]
+        end
+        if has(entry, "type")
+            locked["type"] = entry["type"]
+        end
+        if has(entry, "sha256")
+            locked["sha256"] = entry["sha256"]
+        end
+        if has(entry, "deps")
+            locked["deps"] = entry["deps"]
+        end
+        lockPkgs[n] = locked
+    end
+    write_file(__pkg_config["lock_path"], json_stringify({"project": deps, "packages": lockPkgs}, 2))
+    return 0
+end
+
+# pkg_install(name: str, spec?: str) -> map {name, version, type, path}
+# resolves spec against the registry index, installs that version and everything it depends on, adds the package to
+# embr.json at the exact version it picked, and writes embr.lock. running it again is cheap: the cache check in
+# pkg_download() skips the network when a valid copy already exists
+fn pkg_install(name, spec)
+    local index = pkg_fetch_index()
+    local version = pkg_resolve(index, name, spec)
+    local project = pkg_load_project()
+    local deps = project["dependencies"]
+    deps[name] = version
+    local picked = pkg_resolve_all(index, deps)
+    __pkg_install_picked(index, picked, deps)
+    project["dependencies"] = deps
+    write_file(__pkg_config["project_path"], json_stringify(project, 2))
+    return pkg_load_manifest()[name]
+end
+
+# pkg_info(name: str, spec: str) -> map {name, version, type, url, sha256, deps, description, capabilities, claimed}
+# what the registry says about a package, without installing it. spec is resolved like in pkg_install. capabilities is the
+# registry's claim ([] when it makes none, then `claimed` is 0). to see what a module really needs, install it with a
+# deny_caps list, or download it and read it with meta_module_file
+fn pkg_info(name, spec)
+    local index = pkg_fetch_index()
+    local version = pkg_resolve(index, name, spec)
+    local entry = index[name]["versions"][version]
+    local out = {"name": name, "version": version, "type": "embr", "url": entry["url"], "sha256": "", "deps": {},
+                 "description": "", "capabilities": [], "claimed": 0}
+    for k in ["type", "sha256", "deps", "description"]
+        if has(entry, k)
+            out[k] = entry[k]
+        end
+    end
+    if has(entry, "capabilities")
+        out["capabilities"] = entry["capabilities"]
+        out["claimed"] = 1
+    end
+    return out
+end
+
+# pkg_verify(name: str, spec: str) -> map, pkg_info plus what the downloaded file says about itself
+# downloads the artifact into the cache (checking its sha256 like an install does, nothing is installed) and, for a script module,
+# reads it without running it. adds verified (1 when the file was read), file_capabilities, file_version, file_description,
+# problems, and over_claimed (what the registry claims that the file does not need). a native plugin is never opened here (opening
+# one runs its start-up code), so for type "plugin" verified stays 0 and only the registry's claim is known
+fn pkg_verify(name, spec)
+    local out = pkg_info(name, spec)
+    out["verified"] = 0
+    out["file_capabilities"] = []
+    out["file_version"] = ""
+    out["file_description"] = ""
+    out["problems"] = []
+    out["over_claimed"] = []
+    if out["type"] != "embr" and out["type"] != "package"
+        return out
+    end
+    local index = pkg_fetch_index()
+    local entry = index[name]["versions"][out["version"]]
+    local path = pkg_download(name, out["version"], entry)
+    local m = {}
+    if out["type"] == "embr"
+        m = meta_module_file(path)
+    else
+        m = pmbr_meta(path)
+    end
+    out["verified"] = 1
+    out["file_capabilities"] = m["capabilities"]
+    out["file_version"] = m["version"]
+    out["file_description"] = m["description"]
+    out["problems"] = m["problems"]
+    if out["claimed"] == 1
+        for c in out["capabilities"]
+            if index_of(m["capabilities"], c) < 0
+                out["over_claimed"] = push(out["over_claimed"], c)
+            end
+        end
+    end
+    return out
+end
+
+# pkg_install_project() -> arr of installed names
+# installs everything embr.json depends on. when embr.lock was made for the same dependencies it installs exactly what the
+# lock says, without reading the registry index; otherwise it resolves again and writes a new lock
+fn pkg_install_project()
+    if !fs_exists(__pkg_config["project_path"])
+        error("pkg: no " + __pkg_config["project_path"] + " here: add a package with `embr pkg install <name>` first")
+    end
+    local deps = pkg_load_project()["dependencies"]
+    local lock = __pkg_load_json(__pkg_config["lock_path"])
+    if has(lock, "project") and lock["project"] == deps
+        __pkg_require_registry()
+        for n, entry in lock["packages"]
+            __pkg_install_one(n, entry["version"], entry)
+        end
+        return keys(lock["packages"])
+    end
+    local index = pkg_fetch_index()
+    local picked = pkg_resolve_all(index, deps)
+    __pkg_install_picked(index, picked, deps)
+    return keys(picked)
 end
 
 # pkg_list() -> map (the installed-package manifest: name -> {version, type, path})
@@ -294,19 +662,28 @@ fn pkg_list()
 end
 
 # pkg_remove(name: str) -> 0
-# removes the installed artifact (if its recorded path still exists) and drops it from the manifest. the cache is
-# untouched, so installing the same version again needs no network
+# removes the installed artifact (if its recorded path still exists), drops it from the manifest and from embr.json, and
+# deletes embr.lock (the next install works out a new one). the cache is untouched, so installing the same version again
+# needs no network
 fn pkg_remove(name)
-    manifest = pkg_load_manifest()
+    local manifest = pkg_load_manifest()
     if !has(manifest, name)
         error("pkg: '" + name + "' is not installed")
     end
-    path = manifest[name]["path"]
+    local path = manifest[name]["path"]
     if fs_exists(path)
         fs_remove(path)
     end
     manifest = map_omit(manifest, [name])
     pkg_save_manifest(manifest)
+    if fs_exists(__pkg_config["project_path"])
+        local project = pkg_load_project()
+        project["dependencies"] = map_omit(project["dependencies"], [name])
+        write_file(__pkg_config["project_path"], json_stringify(project, 2))
+    end
+    if fs_exists(__pkg_config["lock_path"])
+        fs_remove(__pkg_config["lock_path"])
+    end
     return 0
 end
 
@@ -318,22 +695,45 @@ end
 fn __pkg_usage()
     print("usage: embr pkg [--registry <url>] <command> [args]")
     print("commands:")
-    print("  install <name> [version]   install a package (default: latest)")
+    print("  install <name> [version]   install a package (default: latest) and add it to embr.json")
+    print("  install                    install everything embr.json lists (from embr.lock when it is up to date)")
     print("  list                       list installed packages")
     print("  remove <name>              uninstall a package")
     print("  versions <name>            list a package's available versions")
+    print("  info <name> [version]      what the registry says about a package: type, dependencies, capabilities")
+    print("  info --verify <name> [version]   the same, and what the downloaded file itself needs (nothing is installed)")
+    print("  pins                       the signer each installed package is pinned to")
+    print("options: --registry <url>, --deny-caps=a,b  refuse a package that needs one of these capabilities")
+    print("         (filesystem, network, process, env, threads, native)")
+    print("         --require-signed  install only packages signed by a key you trust (embr trust)")
+    print("         --allow-signer-change  accept a package whose signer is not the one it was installed with")
     return 1
 end
 
 # pkg_main(argv: arr of str) -> num (process exit code: 0 ok, 1 error/usage)
 fn pkg_main(argv)
-    i = 0
-    registry = ""
-    rest = []
+    local i = 0
+    local registry = ""
+    local rest = []
     while i < len(argv)
         if argv[i] == "--registry" and i + 1 < len(argv)
             registry = argv[i + 1]
             i = i + 2
+        elif argv[i] == "--require-signed"
+            pkg_configure({"require_signed": 1})
+            i = i + 1
+        elif argv[i] == "--allow-signer-change"
+            pkg_configure({"allow_signer_change": 1})
+            i = i + 1
+        elif str_startswith(argv[i], "--deny-caps=")
+            local list = []
+            for c in str_split(slice(argv[i], len("--deny-caps=")), ",")
+                if c != ""
+                    list = push(list, c)
+                end
+            end
+            pkg_configure({"deny_caps": list})
+            i = i + 1
         else
             rest = push(rest, argv[i])
             i = i + 1
@@ -347,30 +747,30 @@ fn pkg_main(argv)
         return __pkg_usage()
     end
 
-    cmd = rest[0]
-    result = 0
+    local cmd = rest[0]
+    local result = 0
     try
         if cmd == "install"
             if len(rest) < 2
-                print("usage: embr pkg install <name> [version]")
-                result = 1
+                local names = pkg_install_project()
+                print("installed " + str(len(names)) + " package(s) from " + __pkg_config["project_path"])
             else
-                name = rest[1]
-                spec = "latest"
+                local name = rest[1]
+                local spec = "latest"
                 if len(rest) >= 3
                     spec = rest[2]
                 end
-                info = pkg_install(name, spec)
+                local info = pkg_install(name, spec)
                 print("installed " + name + "@" + info["version"] + " -> " + info["path"])
             end
         elif cmd == "list"
-            manifest = pkg_list()
-            names = keys(manifest)
+            local manifest = pkg_list()
+            local names = keys(manifest)
             if len(names) == 0
                 print("no packages installed")
             else
                 for n in names
-                    entry = manifest[n]
+                    local entry = manifest[n]
                     print(n + " " + entry["version"] + "  (" + entry["type"] + ", " + entry["path"] + ")")
                 end
             end
@@ -382,12 +782,83 @@ fn pkg_main(argv)
                 pkg_remove(rest[1])
                 print("removed " + rest[1])
             end
+        elif cmd == "info"
+            local verify = index_of(rest, "--verify") >= 0
+            local args = []
+            for a in rest
+                if a != "--verify"
+                    args = push(args, a)
+                end
+            end
+            if len(args) < 2
+                print("usage: embr pkg info [--verify] <name> [version]")
+                result = 1
+            else
+                local spec = "latest"
+                if len(args) >= 3
+                    spec = args[2]
+                end
+                local info = pkg_info(args[1], spec)
+                if verify
+                    info = pkg_verify(args[1], spec)
+                end
+                print(info["name"] + "@" + info["version"] + "  (" + info["type"] + ")")
+                if info["description"] != ""
+                    print("  " + info["description"])
+                end
+                print("  url: " + info["url"])
+                if info["claimed"] == 1
+                    local caps = "nothing"
+                    if len(info["capabilities"]) > 0
+                        caps = join(info["capabilities"], ", ")
+                    end
+                    print("  the registry says it needs: " + caps)
+                else
+                    print("  the registry does not say what it needs")
+                end
+                if verify
+                    if info["verified"] == 1
+                        local fc = "nothing"
+                        if len(info["file_capabilities"]) > 0
+                            fc = join(info["file_capabilities"], ", ")
+                        end
+                        print("  the downloaded file needs: " + fc + "  (read without running it)")
+                        for p in info["problems"]
+                            print("  PROBLEM: " + p)
+                        end
+                        if len(info["over_claimed"]) > 0
+                            print("  the registry claims more than the file needs: " + join(info["over_claimed"], ", "))
+                        end
+                    else
+                        print("  not verified: a native plugin is never opened before it is installed")
+                    end
+                end
+                for dn, dv in info["deps"]
+                    print("  depends on " + dn + "@" + dv)
+                end
+            end
+        elif cmd == "pins"
+            local manifest = pkg_load_manifest()
+            local any = 0
+            for n in keys(manifest)
+                if has(manifest[n], "signer")
+                    any = 1
+                    if manifest[n]["signer"] == ""
+                        print(n + " " + manifest[n]["version"] + "  unsigned")
+                    else
+                        print(n + " " + manifest[n]["version"] + "  signed by " + manifest[n]["signer"])
+                    end
+                end
+            end
+            if any == 0
+                print("no packages installed")
+            end
         elif cmd == "versions"
             if len(rest) < 2
                 print("usage: embr pkg versions <name>")
                 result = 1
             else
-                index = pkg_fetch_index()
+                local index = pkg_fetch_index()
                 for v in pkg_versions(index, rest[1])
                     print(v)
                 end

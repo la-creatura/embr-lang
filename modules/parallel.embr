@@ -21,9 +21,16 @@
 # one failed task aborts the whole worker_map call (it raises with that task's error message) instead of
 # returning partial results
 
+__module__ = {
+    "version": "1.0.0",
+    "description": "map a function over a list on several worker threads",
+    "capabilities": ["threads"],
+}
+
 import "parallel"
 import "embrlib"
 
+# worker_map(module_path, fn_name, inputs, n_workers) calls fn_name(input) from the module at module_path for every input, spread over n_workers threads, and gives the results in input order. one failed task makes the whole call raise with that task's error
 fn worker_map(module_path, fn_name, inputs, n_workers)
     n = len(inputs)
     if n == 0

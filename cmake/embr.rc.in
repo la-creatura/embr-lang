@@ -1,0 +1,2 @@
+// the icon windows shows for embr.exe
+1 ICON "@CMAKE_SOURCE_DIR@/assets/embr.ico"

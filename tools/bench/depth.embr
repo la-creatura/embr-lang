@@ -1,0 +1,20 @@
+# builtin lookups from inside a deep call stack: slow if a global lookup costs one hash per active frame.
+# DEPTH sets how deep (1 or 50); the work is the same.
+import "embrlib"
+fn work()
+    x = [1, 2, 3]
+    s = 0
+    i = 0
+    while i < 100000
+        s = s + len(x)
+        i = i + 1
+    end
+    return s
+end
+fn dive(d)
+    if d > 0
+        return dive(d - 1)
+    end
+    return work()
+end
+print(dive(49))

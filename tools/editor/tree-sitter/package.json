@@ -1,0 +1,8 @@
+{
+  "name": "tree-sitter-embr",
+  "version": "0.1.0",
+  "description": "tree-sitter grammar for the embr scripting language",
+  "main": "bindings/node",
+  "tree-sitter": [{ "scope": "source.embr", "file-types": ["embr"] }],
+  "devDependencies": { "tree-sitter-cli": "^0.22.6" }
+}

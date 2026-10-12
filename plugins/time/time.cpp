@@ -94,7 +94,7 @@ static double epochFromTm(const std::tm& tm) {
 
 
 // the optional "offset" argument: seconds east of UTC, within a day and a bit either side (real zones are -12h..+14h)
-static double offsetArg(const std::vector<Value>& args, size_t i, const char* fn) {
+static double offsetArg(const ArgSpan& args, size_t i, const char* fn) {
     if (args.size() <= i) return 0;
     double off = args[i].asNumber();
     if (!(off > -86400 && off < 86400)) throwError(fn, "offset must be between -86400 and 86400 seconds");
@@ -136,10 +136,10 @@ static long long localOffset(double t) {
 }
 
 // time_utc_offset(t: num = now) -> num, seconds east of UTC for the machine's local zone at time t
-Value time_utc_offset(const std::vector<Value>& args) {
+Value time_utc_offset(const ArgSpan& args) {
     double t = args.empty() ? std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count()
                             : args[0].asNumber();
-    return Value((double)localOffset(t));
+    return Value((int64_t)localOffset(t));
 }
 
 // reads "+hhmm", "+hh:mm", "-hhmm" or "Z" from the stream, returns the offset in seconds. false if it isn't one
@@ -160,41 +160,39 @@ static bool readZ(std::istringstream& ss, long long& off) {
 }
 
 // time_now() -> num, seconds since the Unix epoch (UTC), with sub-second precision
-Value time_now(const std::vector<Value>&) {
+double time_now() {
     auto now = std::chrono::system_clock::now();
-    return Value(std::chrono::duration<double>(now.time_since_epoch()).count());
+    return std::chrono::duration<double>(now.time_since_epoch()).count();
 }
 
 // time_now_ms() -> num, whole milliseconds since the Unix epoch (as an exact int64)
-Value time_now_ms(const std::vector<Value>&) {
+int64_t time_now_ms() {
     auto now = std::chrono::system_clock::now();
     auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
-    return Value((int64_t)ms.count());
+    return (int64_t)ms.count();
 }
 
 // time_monotonic() -> num, seconds from an unspecified fixed starting point, never going backwards. unlike
 // time_now() it isn't tied to the calendar and ignores system clock changes. for stopwatch-style timing:
 // `t0 = time_monotonic(); ...; elapsed = time_monotonic() - t0`
-Value time_monotonic(const std::vector<Value>&) {
+double time_monotonic() {
     auto now = std::chrono::steady_clock::now();
-    return Value(std::chrono::duration<double>(now.time_since_epoch()).count());
+    return std::chrono::duration<double>(now.time_since_epoch()).count();
 }
 
 // time_sleep(seconds: num) -> 0
-Value time_sleep(const std::vector<Value>& args) {
-    double secs = args[0].asNumber();
+void time_sleep(double secs) {
     if (!(secs >= 0)) throwError("time_sleep", "seconds must not be negative or NaN");
     // duration<double> -> integer ticks overflows (UB) for enormous values; 1e9 s is ~31 years, far past
     // any sleep a script means
     if (secs > 1e9) throwError("time_sleep", "seconds too large (max 1e9)");
     std::this_thread::sleep_for(std::chrono::duration<double>(secs));
-    return Value(0.0);
 }
 
 // time_format(epoch: num, fmt: str, offset: num = 0) -> str
 // fmt is a strftime() format string (e.g. "%Y-%m-%d %H:%M:%S"). the time is shown in the zone that is
 // `offset` seconds east of UTC (default UTC), and %z prints that offset
-Value time_format(const std::vector<Value>& args) {
+Value time_format(const ArgSpan& args) {
     double offset = offsetArg(args, 2, "time_format");
     std::tm tm = tmFromEpoch(args[0].asNumber() + offset);
     const std::string fmt = expandZ(args[1].asString(), (long long)offset);
@@ -217,7 +215,7 @@ Value time_format(const std::vector<Value>& args) {
 // fmt is a std::get_time()-compatible format string (the same %Y/%m/%d/... specifiers as strftime). the text is
 // read as a time in the zone `offset` seconds east of UTC, unless fmt has %z, which then wins. raises if str
 // doesn't match fmt
-Value time_parse(const std::vector<Value>& args) {
+Value time_parse(const ArgSpan& args) {
     const std::string& str = args[0].asString();
     const std::string& fmt = args[1].asString();
     long long off = (long long)offsetArg(args, 2, "time_parse");
@@ -245,12 +243,28 @@ Value time_parse(const std::vector<Value>& args) {
 }
 
 EMBR_PLUGIN {
-    interp->bind("time_now",       time_now);
-    interp->bind("time_now_ms",    time_now_ms);
-    interp->bind("time_monotonic", time_monotonic);
+    interp->bindTyped("time_now", {},       time_now);
+    interp->bindTyped("time_now_ms", {},    time_now_ms);
+    interp->bindTyped("time_monotonic", {}, time_monotonic);
 
-    interp->bindSig("time_sleep",   {pNum("seconds")}, time_sleep);
-    interp->bindSig("time_format",  {pNum("epoch"), pStr("fmt"), Param::opt("offset", TS::Num)}, time_format);
-    interp->bindSig("time_parse",   {pStr("str"), pStr("fmt"), Param::opt("offset", TS::Num)}, time_parse);
-    interp->bindSig("time_utc_offset", {Param::opt("t", TS::Num)}, time_utc_offset);
+    interp->bindTyped("time_sleep",   {"seconds"}, time_sleep);
+    interp->bindSpan("time_format",  {pNum("epoch"), pStr("fmt"), Param::opt("offset", TS::Num)}, time_format);
+    interp->bindSpan("time_parse",   {pStr("str"), pStr("fmt"), Param::opt("offset", TS::Num)}, time_parse);
+    interp->bindSpan("time_utc_offset", {Param::opt("t", TS::Num)}, time_utc_offset);
+
+    // what each always returns (see Value::Callable::returns)
+    interp->setResultTypes({
+        {"time_now", TS::Float}, {"time_now_ms", TS::Int}, {"time_monotonic", TS::Float}, {"time_sleep", TS::Float},
+        {"time_format", TS::Str}, {"time_parse", TS::Float}, {"time_utc_offset", TS::Int},
+    });
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("time", "1.0.0", "wall clock, stopwatch, sleep and UTC date formatting", EMBR_CAP_NONE, EMBR_CAP_NONE,
+    {"time_format", "fmt is strftime-style. shows the time in the zone offset seconds east of UTC (default 0, must be within +-86400). %z prints that offset like +0130. no named zones, no %Z"},
+    {"time_monotonic", "steady-clock seconds from an unspecified fixed point. for stopwatch use only, wall-clock changes don't affect it"},
+    {"time_now", "seconds since Unix epoch (UTC), sub-second precision"},
+    {"time_now_ms", "whole milliseconds since epoch (int64-exact)"},
+    {"time_parse", "fmt is get_time-compatible. reads the text as being in the zone offset seconds east of UTC, unless fmt has %z (accepts +hhmm, +hh:mm, Z), which wins. raises (quoting the input and format) on input it can't parse"},
+    {"time_sleep", "raises on negative"},
+    {"time_utc_offset", "seconds east of UTC for the machine's local zone at time t (default now), so time_format(t, fmt, time_utc_offset(t)) prints local time"});

@@ -17,7 +17,7 @@ int main() {
         // the VM remembers where top-level variables live; clearing dead scopes must not leave it pointing at one
         { "gc_collect: globals read and written around collections stay right",
           "fn make_thing()\n"
-          "    local self_ref = 0\n"
+          "    local any self_ref = 0\n"
           "    fn recur()\n"
           "        return self_ref\n"
           "    end\n"
@@ -37,7 +37,7 @@ int main() {
 
         { "gc_collect: breaks a self-referential closure cycle",
           "fn make_thing()\n"
-          "    local self_ref = 0\n"
+          "    local any self_ref = 0\n"
           "    fn recur()\n"
           "        return self_ref\n"
           "    end\n"
@@ -54,7 +54,7 @@ int main() {
 
         { "gc_collect: frees closures after errors unwound through many nested calls (VM frame roots are released on unwind)",
           "fn make_thing()\n"
-          "    local self_ref = 0\n"
+          "    local any self_ref = 0\n"
           "    fn recur()\n"
           "        return self_ref\n"
           "    end\n"
@@ -147,7 +147,7 @@ int main() {
 
         { "gc_collect: a cycle that runs THROUGH a table (scope -> table -> closure -> scope) is still collected when unreachable",
           "fn make_thing()\n"
-          "    local t = table()\n"             // `local`: an undeclared `t = ...` leaks to global on the tree-walker only
+          "    local t = table()\n"             // `local`, so t is clearly a local of make_thing()
           "    fn f()\n"
           "        return t\n"
           "    end\n"

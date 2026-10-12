@@ -8,6 +8,7 @@
 // hello_counter_add(c, 5)
 // print(hello_counter_get(c))                       # 5
 // print(hello_map_sum([1, 2, 3], fn(x) return x * 10 end))   # 60  (calls back into script code)
+// print(hello_describe("abc"), hello_describe(21))          # two overloads, one name
 
 #include <embr/embr.h>
 
@@ -36,6 +37,18 @@ EMBR_PLUGIN {
     [](const std::vector<Value>& args) -> Value {
         std::string greeting = args.size() >= 2 ? args[1].asString() : "hewwo";
         return Value(greeting + ", " + args[0].asString() + " uwu!");
+    });
+
+    // two functions with the same name and a number on the end are one overload group, hello_describe. a script calls the bare name and
+    // embr picks the one that takes the argument. the number is part of each function's name: a script that calls hello_describe__2 gets
+    // that one for ever, so add hello_describe__3 rather than changing a number
+    interp->bindSig("hello_describe__1", {pStr("text")},
+    [](const std::vector<Value>& args) -> Value {
+        return Value("a string of " + std::to_string(args[0].asString().size()) + " bytes");
+    });
+    interp->bindSig("hello_describe__2", {pNum("n")},
+    [](const std::vector<Value>& args) -> Value {
+        return Value("a number, doubled it is " + formatNumber(args[0].asNumber() * 2));
     });
 
     // hello_counter() -> ptr<hello.counter>
@@ -79,4 +92,20 @@ EMBR_PLUGIN {
         }
         return Value(total);
     });
+
+    // what hello_greet always gives back, so the checker knows
+    interp->setResultTypes({{"hello_greet", TS::Str}, {"hello_describe__1", TS::Str}, {"hello_describe__2", TS::Str}});
+    // hello_greet depends only on its arguments, so a const may call it: const HI = hello_greet("you")
+    interp->setPure({"hello_greet"});
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register, so it can refuse a plugin that needs
+// something the host does not allow, and `embr plugin hello` can print it (see the writing-plugins wiki page)
+EMBR_PLUGIN_INFO("hello", "1.0.0", "the worked example for the writing-plugins wiki page", EMBR_CAP_NONE, EMBR_CAP_NONE,
+    {"hello_counter", "a new counter handle, starting at 0"},
+    {"hello_counter_add", "adds n to the counter and gives back the new total"},
+    {"hello_counter_get", "the counter's current total"},
+    {"hello_describe__1", "describes a string by its size in bytes"},
+    {"hello_describe__2", "describes a number by what it is doubled"},
+    {"hello_greet", "a greeting for name, with an optional greeting word instead of the default"},
+    {"hello_map_sum", "calls fn on every value of the array and adds up the results"});

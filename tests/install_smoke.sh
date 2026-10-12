@@ -11,6 +11,12 @@ bad() { echo "FAIL [$1]"; fail=1; }
 
 cmake --install "$build" --prefix "$work/prefix" >/dev/null 2>"$work/err" || { echo "FAIL: cmake --install: $(tail -3 "$work/err")"; exit 1; }
 p="$work/prefix"
+if [[ "$(uname)" == Linux ]]; then
+    for f in share/embr/uninstall.sh share/embr/open.sh share/embr/integration/embr.desktop share/embr/integration/embr-mime.xml \
+             share/embr/integration/icons/hicolor/scalable/apps/embr.svg share/embr/integration/icons/hicolor/256x256/apps/embr.png; do
+        [[ -e "$p/$f" ]] || bad "missing $f in the install"
+    done
+fi
 case "$(uname)" in Darwin) ext=dylib ;; *) ext=so ;; esac   # plugin file extension on this platform
 for f in bin/embr include/embr/embr.h lib/embr/plugins/str.$ext lib/embr/plugins/json.$ext lib/embr/modules/testing.embr share/doc/embr/README.md; do
     [[ -e "$p/$f" ]] || bad "missing $f in the install"

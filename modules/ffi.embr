@@ -36,6 +36,12 @@
 # (closures share the live scope, see CaptureFrame in core/value.h, so exported functions see each other's writes),
 # but a plain binding is simpler. the double underscore is only a naming convention for "internal"
 
+__module__ = {
+    "version": "1.0.0",
+    "description": "call C functions from C declarations, on top of the ffi and embrtypes plugins",
+    "capabilities": ["native"],
+}
+
 import "embrtypes"
 import "embrmeta"
 import "ffi"
@@ -183,21 +189,15 @@ end
 # identifier in the return type/qualifiers is followed by '(')
 __ffi_decl_pattern = "^\\s*(.+?)\\s+(\\w+)\\s*\\(\\s*(.*?)\\s*\\)\\s*;?\\s*$"
 
-# ffi_cdef(lib: ptr<ffi.lib>, decl: str) -> 0
-# parses decl as a single C function declaration, resolves its signature,
-# and installs a global function under its name that calls into lib via
-# ffi_invoke(). see this file's header comment for what's supported.
-fn ffi_cdef(lib, decl)
+# parses one declaration into {name, ret, args, nfixed, variadic}
+fn __ffi_parse_decl(decl)
     m = re_match(decl, __ffi_decl_pattern)
     if len(m) == 0
         error("ffi_cdef: could not parse declaration: " + decl)
     end
 
-    ret_raw    = m[1]
-    name       = m[2]
+    ret_desc  = __ffi_resolve_return(m[1])
     params_raw = m[3]
-
-    ret_desc  = __ffi_resolve_return(ret_raw)
     arg_descs = []
     variadic  = 0
     nfixed    = 0
@@ -216,10 +216,16 @@ fn ffi_cdef(lib, decl)
             end
         end
     end
+    return {name: m[2], ret: ret_desc, args: arg_descs, nfixed: nfixed, variadic: variadic}
+end
 
-    sym = ffi_sym(lib, name)
-
-    if variadic == 1
+# installs the callable for a parsed declaration, calling sym
+fn __ffi_install(sym, d)
+    name = d["name"]
+    ret_desc = d["ret"]
+    arg_descs = d["args"]
+    nfixed = d["nfixed"]
+    if d["variadic"] == 1
         # see __ffi_infer_vararg_type's comment for why this can't be
         # prepared once up front the way the non-variadic path below is
         meta_set(name, fn(...args)
@@ -236,4 +242,122 @@ fn ffi_cdef(lib, decl)
         meta_set(name, fn(...args) return ffi_invoke(prep, args) end)
     end
     return 0
+end
+
+# ffi_cdef(lib: ptr<ffi.lib>, decl: str) -> 0
+# parses decl as a single C function declaration, resolves its signature,
+# and installs a global function under its name that calls into lib via
+# ffi_invoke(). see this file's header comment for what's supported.
+fn ffi_cdef(lib, decl)
+    d = __ffi_parse_decl(decl)
+    return __ffi_install(ffi_sym(lib, d["name"]), d)
+end
+
+# ffi_cdef_at(address: ptr, decl: str) -> 0
+# the same for a function that is not in a library you opened: an address from glXGetProcAddress, rlGetProcAddress
+# or a function pointer held in a struct. the name in decl is what the global is called. nothing checks the address
+fn ffi_cdef_at(address, decl)
+    d = __ffi_parse_decl(decl)
+    return __ffi_install(ffi_fn(address, d["name"]), d)
+end
+
+# ffi_ctype(text: str) -> desc
+# the descriptor for a C type written as text ("unsigned int", "const char *", "Vector2"), looked up the same way
+# ffi_cdef looks up a parameter. a struct or typedef name has to be registered first (ffi_typedef or ffi_bind)
+fn ffi_ctype(text)
+    parts = __ffi_norm_type(text)
+    return __ffi_resolve_base(parts[0], parts[1], parts[2])
+end
+
+# a declaration for ffi_cdef built from header pieces. every parameter gets a name (a0, a1, ...) because ffi_cdef
+# takes the last word of "unsigned int" for a name when there is none
+__ffi_decl_from = fn(name, f)
+    ps = []
+    i = 0
+    for t in f["params"]
+        ps = push(ps, t + " a" + str(i))
+        i = i + 1
+    end
+    if f["variadic"] == 1
+        ps = push(ps, "...")
+    end
+    return f["ret"] + " " + name + "(" + join(ps, ", ") + ")"
+end
+
+# ffi_bind(lib: ptr<ffi.lib>, header: map, options?: map) -> map
+# binds what cheader.embr read from a C header (cheader_load / cheader_parse): registers its structs, typedefs and
+# enums with ffi_typedef, then installs every function the library exports with ffi_cdef, as a global under its own
+# name. what comes back says what happened:
+#   bound    how many functions were installed
+#   missing  declared in the header but not exported by the library
+#   failed   {name: reason} for a declaration or type that could not be bound
+# options: only [names], bind just these functions (a library with 600 functions takes a while to bind),
+# aliases 1 also installs the header's function aliases (#define GetMouseRay GetScreenToWorldRay)
+fn ffi_bind(lib, header, ...rest)
+    opts = {}
+    if len(rest) > 0
+        opts = rest[0]
+    end
+    failed = {}
+    for t in header["types"]
+        k = t["kind"]
+        try
+            if k == "alias"
+                if t["target"] != "void"
+                    ffi_typedef(t["name"], ffi_ctype(t["target"]))
+                end
+            elif k == "enum"
+                ffi_typedef(t["name"], type_i32())
+            elif k == "funcptr"
+                ffi_typedef(t["name"], type_ptr())
+            elif k == "struct"
+                fields = []
+                for f in t["fields"]
+                    # a pointer field is a plain pointer, also `const char *` (a string is not a field of a struct)
+                    if re_test(f[1], "\\*")
+                        fields = push(fields, [f[0], type_ptr()])
+                    else
+                        fields = push(fields, [f[0], ffi_ctype(f[1])])
+                    end
+                end
+                d = struct_type(fields)
+                ffi_typedef(t["name"], d)
+                if t["tag"] != "" and t["tag"] != t["name"]
+                    ffi_typedef(t["tag"], d)
+                end
+            end
+        catch e
+            failed[t["name"]] = e["message"]
+        end
+    end
+    names = header["function_order"]
+    if has(opts, "only")
+        names = opts["only"]
+    end
+    missing = []
+    bound = 0
+    for name in names
+        if !has(header["functions"], name)
+            failed[name] = "not declared in the header"
+            continue
+        end
+        try
+            ffi_cdef(lib, __ffi_decl_from(name, header["functions"][name]))
+            bound = bound + 1
+        catch e
+            if re_test(e["message"], "(not found|undefined symbol|cannot find)")
+                missing = push(missing, name)
+            else
+                failed[name] = e["message"]
+            end
+        end
+    end
+    if has(opts, "aliases") and opts["aliases"] == 1
+        for alias, target in header["aliases"]
+            if meta_has(target)
+                meta_set(alias, meta_get(target))
+            end
+        end
+    end
+    return {bound: bound, missing: missing, failed: failed}
 end

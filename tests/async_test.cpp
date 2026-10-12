@@ -56,6 +56,11 @@ int main() {
     using embr_test::Test;
     std::vector<Test> tests = {
 
+        { "async_queue_limit: reads and sets the limit, 0 means none, a negative one is refused",
+          "print(async_queue_limit())\nprint(async_queue_limit(5))\nprint(async_queue_limit(0))\n"
+          "try\nasync_queue_limit(-1)\ncatch e\nprint(\"caught\")\nend\n",
+          "10000\n5\n0\ncaught\n" },
+
         { "async_spawn: rejects a value that isn't safe to share across threads (a plain table() handle)",
           "t = table()\n"
           "try\nasync_spawn(\"test_async_worker.embr\", \"square\", t)\nprint(\"unreachable\")\ncatch e\nprint(\"caught\")\nend\n",
@@ -116,6 +121,14 @@ int main() {
           "i = 0\nwhile i < len(rs)\n  print(rs[i][\"value\"])\n  i = i + 1\nend\n",
           "1\n4\n9\n16\n25\n" },
 
+        { "async_queue_limit: a spawner that gets ahead of the pool waits instead of failing or growing the queue",
+          "print(async_queue_limit(1))\n"
+          "ps = []\ni = 0\nwhile i < 40\n  ps = push(ps, async_spawn(\"test_async_worker.embr\", \"square\", i))\n  i = i + 1\nend\n"
+          "rs = async_all(ps)\n"
+          "total = 0\nj = 0\nwhile j < len(rs)\n  total = total + rs[j][\"value\"]\n  j = j + 1\nend\n"
+          "print(total)\n",
+          "1\n20540\n" },
+
         { "async_all: reports each task's own outcome without aborting the batch on one failure",
           "ps = [async_spawn(\"test_async_worker.embr\", \"maybe_raise\", 1),"
           " async_spawn(\"test_async_worker.embr\", \"maybe_raise\", -1),"
@@ -145,19 +158,21 @@ int main() {
           "caught\n" },
     };
 
-    embr::Interpreter interp;
-    for (const auto& p : {"async", "embrlib", "table"})
-        embr_test::runSourceAny(std::string("import \"") + p + "\"", interp, "");
+    const std::vector<std::string> plugins = {"async", "embrlib", "table"};
 
     int passed = 0, failed = 0;
     std::cout << "\n\033[1m async plugin test suite \033[0m\n";
     for (const auto& t : tests) {
-        auto r = embr_test::runTest(t, interp);
+        auto interp = embr_test::freshInterpreter(plugins);
+        auto r = embr_test::runTest(t, *interp);
         embr_test::printResult(r);
         r.passed ? ++passed : ++failed;
     }
+    // these share one interpreter: the shared pool of worker threads lives as long as an interpreter does, and the last test
+    // counts on tasks from the ones before it having started it
+    auto workerInterp = embr_test::freshInterpreter(plugins);
     for (const auto& t : workerTests) {
-        bool ok = runSuffixTest(t, interp);
+        bool ok = runSuffixTest(t, *workerInterp);
         ok ? ++passed : ++failed;
     }
 

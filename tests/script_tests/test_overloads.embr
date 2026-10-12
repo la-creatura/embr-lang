@@ -1,0 +1,9 @@
+# overload groups of plugins, used from an imported module
+import "testing.embr"
+import "fixture_overload_module.embr"
+
+fn test_bare_group_name_works_inside_an_imported_module()
+    assert_eq(floor_it(2.5), 2)
+    assert_eq(floor_it(3), 3)
+    assert_eq(floor_it(-0.5), -1)
+end

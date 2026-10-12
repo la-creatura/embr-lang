@@ -32,6 +32,7 @@
 //       {"verify": 0}            accept any certificate (local testing only, the connection can be intercepted)
 //       {"ca_file": "path.pem"}  trust this PEM bundle instead (pin a private CA without turning verification off)
 //     (http_get/http_post take no opts map, use http_request)
+//   - a response bigger than 64 MiB raises instead of filling memory. opts.max_bytes changes the limit (0 = none). http_download streams to the file and has no limit unless you give one
 //   - 10 second socket timeout for connect/read/write. override it with {"timeout": seconds} in http_request opts
 //   - every call blocks the calling thread until it finishes. plugins don't depend on each other, so this one doesn't use async
 
@@ -65,6 +66,8 @@ static void throwError(const std::string& fn, const std::string& msg) {
 }
 
 namespace {
+
+constexpr int64_t kDefaultMaxBody = 64LL * 1024 * 1024;
 
 std::string toLower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -111,6 +114,7 @@ double timeoutFromOpts(const Value* opts) {
 struct TlsOpts {
     bool        verify = true;
     std::string caFile;
+    int64_t     maxBytes = -1;   // opts.max_bytes. -1 = not given: 64 MiB in memory, no limit for a download. 0 = no limit
 };
 
 TlsOpts tlsFromOpts(const std::string& fn, const Value* opts) {
@@ -119,6 +123,12 @@ TlsOpts tlsFromOpts(const std::string& fn, const Value* opts) {
         const auto& m = opts->asMap();
         auto v = m.find("verify");
         if (v != m.end()) t.verify = v->second.truthy();
+        auto mb = m.find("max_bytes");
+        if (mb != m.end()) {
+            if (!mb->second.isNumeric()) throwError(fn, "opts.max_bytes must be a number");
+            t.maxBytes = numToInt64(mb->second, fn, "opts.max_bytes");
+            if (t.maxBytes < 0) throwError(fn, "opts.max_bytes must not be negative");
+        }
         auto c = m.find("ca_file");
         if (c != m.end()) {
             if (!c->second.isString()) throwError(fn, "opts.ca_file must be a string path");
@@ -199,98 +209,55 @@ Value performRequest(const std::string& fn, const std::string& method, const std
         if (!hasContentType) req.headers.emplace("Content-Type", "application/octet-stream");
     }
 
+    // the body is read in pieces so a huge response can be refused (or, for a download, written to disk) without
+    // ever holding it all in memory
+    const int64_t limit = tls.maxBytes >= 0 ? tls.maxBytes : (downloadTo ? 0 : kDefaultMaxBody);
+    std::string bodyBuf;
+    std::ofstream file;
+    if (downloadTo) {
+        file.open(*downloadTo, std::ios::binary | std::ios::trunc);
+        if (!file) throwError(fn, "cannot open '" + downloadTo->string() + "' for writing");
+    }
+    int64_t total = 0;
+    bool tooBig = false, skip = false;
+    req.response_handler = [&](const httplib::Response& r) {
+        // a redirect that will be followed has a body nobody wants
+        skip = follow && r.status >= 300 && r.status < 400 && r.has_header("Location");
+        return true;
+    };
+    req.content_receiver = [&](const char* data, size_t n, uint64_t, uint64_t) {
+        if (skip) return true;
+        total += (int64_t)n;
+        if (limit > 0 && total > limit) { tooBig = true; return false; }
+        if (downloadTo) file.write(data, (std::streamsize)n);
+        else bodyBuf.append(data, n);
+        return true;
+    };
+
     httplib::Response res;
     httplib::Error err = httplib::Error::Success;
     bool sent = cli.send(req, res, err);
+    if (tooBig)
+        throwError(fn, "response is larger than " + std::to_string(limit) + " bytes (raise it with opts.max_bytes, 0 for no limit)");
     if (!sent || err != httplib::Error::Success)
         throwError(fn, "request to " + rawUrl + " failed: " + httplib::to_string(err));
 
     Value::map_type out;
-    out["status"] = Value((double)res.status);
-    out["ok"]     = Value((res.status >= 200 && res.status < 400) ? 1.0 : 0.0);
+    out["status"] = Value((int64_t)res.status);
+    out["ok"]     = Value((res.status >= 200 && res.status < 400) ? (int64_t)1 : (int64_t)0);
 
     Value::map_type headersOut;
     for (auto& [k, v] : res.headers) headersOut[toLower(k)] = Value(v);
     out["headers"] = Value(std::move(headersOut));
 
     if (downloadTo) {
-        std::ofstream f(*downloadTo, std::ios::binary | std::ios::trunc);
-        if (!f) throwError(fn, "cannot open '" + downloadTo->string() + "' for writing");
-        f.write(res.body.data(), (std::streamsize)res.body.size());
-        if (!f) throwError(fn, "failed writing response body to '" + downloadTo->string() + "'");
-        out["bytes"] = Value((double)res.body.size());
+        file.flush();
+        if (!file) throwError(fn, "failed writing response body to '" + downloadTo->string() + "'");
+        out["bytes"] = Value(total);
     } else {
-        out["body"] = Value(std::move(res.body));
+        out["body"] = Value(std::move(bodyBuf));
     }
     return Value(std::move(out));
-}
-
-// SHA-256, single-shot. it lives here (not in its own plugin) because the package manager built on this plugin
-// needs to check downloaded artifacts against a registry checksum. independent of httplib/OpenSSL, so
-// http_sha256 works the same with or without TLS
-std::string sha256Hex(const std::string& msg) {
-    static const uint32_t k[64] = {
-        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
-    };
-    uint32_t h[8] = {
-        0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
-        0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19,
-    };
-
-    std::string data = msg;
-    uint64_t bitLen = (uint64_t)msg.size() * 8;
-    data += (char)0x80;
-    while (data.size() % 64 != 56) data += (char)0x00;
-    for (int i = 7; i >= 0; --i) data += (char)((bitLen >> (i * 8)) & 0xFF);
-
-    auto rotr = [](uint32_t x, uint32_t n) { return (x >> n) | (x << (32 - n)); };
-
-    for (size_t chunk = 0; chunk < data.size(); chunk += 64) {
-        uint32_t w[64];
-        for (int i = 0; i < 16; ++i) {
-            w[i] = ((uint32_t)(unsigned char)data[chunk + i * 4] << 24) |
-                   ((uint32_t)(unsigned char)data[chunk + i * 4 + 1] << 16) |
-                   ((uint32_t)(unsigned char)data[chunk + i * 4 + 2] << 8) |
-                   ((uint32_t)(unsigned char)data[chunk + i * 4 + 3]);
-        }
-        for (int i = 16; i < 64; ++i) {
-            uint32_t s0 = rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3);
-            uint32_t s1 = rotr(w[i-2], 17) ^ rotr(w[i-2], 19) ^ (w[i-2] >> 10);
-            w[i] = w[i-16] + s0 + w[i-7] + s1;
-        }
-
-        uint32_t a = h[0], b = h[1], c = h[2], d = h[3];
-        uint32_t e = h[4], f = h[5], g = h[6], hh = h[7];
-
-        for (int i = 0; i < 64; ++i) {
-            uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
-            uint32_t ch = (e & f) ^ (~e & g);
-            uint32_t temp1 = hh + S1 + ch + k[i] + w[i];
-            uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
-            uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-            uint32_t temp2 = S0 + maj;
-
-            hh = g; g = f; f = e; e = d + temp1;
-            d = c; c = b; b = a; a = temp1 + temp2;
-        }
-
-        h[0]+=a; h[1]+=b; h[2]+=c; h[3]+=d; h[4]+=e; h[5]+=f; h[6]+=g; h[7]+=hh;
-    }
-
-    static const char* hex = "0123456789abcdef";
-    std::string out;
-    out.reserve(64);
-    for (uint32_t v : h)
-        for (int shift = 28; shift >= 0; shift -= 4)
-            out += hex[(v >> shift) & 0xF];
-    return out;
 }
 
 } // namespace
@@ -380,9 +347,25 @@ EMBR_PLUGIN {
     interp->bind("http_tls_available",
     [](const std::vector<Value>&) -> Value {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        return Value(1.0);
+        return Value((int64_t)1);
 #else
-        return Value(0.0);
+        return Value((int64_t)0);
 #endif
     });
+
+    // what each always returns (see Value::Callable::returns)
+    interp->setResultTypes({
+        {"http_request", TS::Map}, {"http_get", TS::Map}, {"http_post", TS::Map}, {"http_download", TS::Map},
+        {"http_url_encode", TS::Str}, {"http_sha256", TS::Str}, {"http_tls_available", TS::Int},
+    });
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("http", "1.0.0", "HTTP(S) client", EMBR_CAP_NETWORK | EMBR_CAP_FILESYSTEM, EMBR_CAP_NONE,
+    {"http_download", "same opts, but no size limit unless you give max_bytes; streams the body to path (relative paths resolve like write_file's, parents created) and returns {\"status\",\"ok\",\"headers\",\"bytes\"} (no \"body\")"},
+    {"http_get", "no opts (so the 64 MiB body limit applies), use http_request for timeouts and TLS options. http_post defaults Content-Type: application/octet-stream if none given"},
+    {"http_post", "no opts (so the 64 MiB body limit applies), use http_request for timeouts and TLS options. http_post defaults Content-Type: application/octet-stream if none given"},
+    {"http_request", "opts: timeout (seconds, default 10; connect/read/write), follow (default 1; 0 returns the 3xx itself, target in headers[\"location\"]), verify (default 1; 0 accepts any certificate, for local testing only), ca_file (PEM bundle to trust instead of the system store, e.g. to pin a private CA or a self-signed server cert), max_bytes (the biggest body it will accept, default 64 MiB, 0 for no limit; a bigger response raises)"},
+    {"http_sha256", "hex digest, for checking downloads against a published checksum (modules/pkg.embr uses it)"},
+    {"http_tls_available", "1 if this build can do https://"},
+    {"http_url_encode", "percent-encodes everything outside [A-Za-z0-9-_.~]"});

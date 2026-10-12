@@ -1,0 +1,104 @@
+# the bit operators & | ^ ~ << >> on ints
+import "testing.embr"
+import "embrlib"
+
+fn test_each_operator()
+    assert_eq(6 & 3, 2)
+    assert_eq(6 | 3, 7)
+    assert_eq(6 ^ 3, 5)
+    assert_eq(~6, -7)
+    assert_eq(~0, -1)
+    assert_eq(1 << 5, 32)
+    assert_eq(256 >> 4, 16)
+end
+
+fn test_negative_numbers_are_twos_complement()
+    assert_eq(-1 & 255, 255)
+    assert_eq(-16 >> 2, -4)
+    assert_eq(-1 >> 63, -1)
+    assert_eq(-8 | 3, -5)
+    assert_eq(-1 ^ -1, 0)
+end
+
+fn test_a_shift_left_wraps_and_the_result_stays_an_int()
+    assert_eq(1 << 62, 4611686018427387904)
+    assert_eq(1 << 63, -9223372036854775807 - 1)
+    assert_eq(type(1 << 63), "int")
+    assert_eq(1 << 64 - 1, 1 << 63)
+    assert_eq(type(5 & 3), "int")
+end
+
+fn test_precedence_matches_python_not_c()
+    # comparison is lower than the bit operators, so no brackets are needed in a mask test
+    assert_eq(5 & 1 == 1, 1)
+    assert_eq(6 & 1 == 1, 0)
+    # | is lowest, then ^, then &, then shifts, then + -, then * / %
+    assert_eq(1 | 2 & 3 ^ 4, 1 | ((2 & 3) ^ 4))
+    assert_eq(2 + 3 << 1, 10)
+    assert_eq(1 << 2 * 2, 16)
+    assert_eq(16 >> 1 + 1, 4)
+    assert_eq(1 | 2 << 1, 5)
+    assert_eq(~1 + 1, -1)
+    assert_eq(- 1 << 2, -4)
+end
+
+fn test_shift_right_beside_nested_type_annotations()
+    local arr<arr<int>> grid = [[8, 16], [32, 64]]
+    assert_eq(grid[1][0] >> 2, 8)
+    assert_eq(grid[0][1] >> 1 > 7, 1)
+    fn pick(rows: arr<arr<int>>) -> int
+        return rows[0][0] << 1
+    end
+    assert_eq(pick(grid), 16)
+end
+
+fn test_flags()
+    VISIBLE = 1 << 0
+    FOCUSED = 1 << 1
+    PINNED = 1 << 5
+    flags = VISIBLE | PINNED
+    assert_eq(flags, 33)
+    assert_eq(flags & FOCUSED, 0)
+    assert_eq((flags & PINNED) != 0, 1)
+    flags = flags | FOCUSED
+    flags = flags & ~VISIBLE
+    assert_eq(flags, 34)
+end
+
+const BASE = 1 << 4
+const MASK = BASE | 3
+const TOP = ~0 & 255
+
+fn test_constants_are_worked_out()
+    assert_eq(BASE, 16)
+    assert_eq(MASK, 19)
+    assert_eq(TOP, 255)
+end
+
+fn test_wrong_operands_are_errors_at_run_time()
+    local any fl = 1.5
+    local any text = "a"
+    local any count = 64
+    local any minus = -1
+    assert_raises_with(fn() return fl & 1 end, "'&' needs two ints")
+    assert_raises_with(fn() return 1 | text end, "'|' needs two ints")
+    assert_raises_with(fn() return ~fl end, "'~' needs an int")
+    assert_raises_with(fn() return 1 << count end, "0 to 63")
+    assert_raises_with(fn() return 1 >> count end, "0 to 63")
+    assert_raises_with(fn() return 1 << minus end, "shift count -1")
+end
+
+fn test_in_a_loop_and_through_a_function()
+    mask(a, b) = a & b
+    total = 0
+    for i in [0...7]
+        total = total | (1 << i)
+    end
+    assert_eq(total, 255)
+    assert_eq(mask(total, 15), 15)
+    h = 5381
+    for c in [104, 105]
+        h = ((h << 5) + h) ^ c
+    end
+    assert_eq(h, 5861124)
+end

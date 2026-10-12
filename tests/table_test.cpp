@@ -15,6 +15,12 @@ int main() {
           "print(table_get(t, \"name\"))\n",
           "embr\n" },
 
+        { "table: t[key], t[key] = x and for pair in t work like table_get, table_set and table_items",
+          "t = table()\nt[\"a\"] = 1\nt[2] = \"two\"\nprint(t[\"a\"])\nprint(t[2])\nt[\"a\"] = t[\"a\"] + 10\nprint(t[\"a\"])\n"
+          "n = 0\nfor pair in t\n  n = n + 1\nend\nprint(n)\n"
+          "try\n  print(t[\"missing\"])\ncatch e\n  print(\"no key\")\nend\n",
+          "1\ntwo\n11\n2\nno key\n" },
+
         { "table: number keys normalize int and float to the same slot",
           "t = table()\n"
           "table_set(t, 5, \"int five\")\n"

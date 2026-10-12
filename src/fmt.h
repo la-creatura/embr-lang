@@ -39,12 +39,39 @@ struct Piece {
     std::string raw;                  // exact source text of the token
     int         newlinesBefore = 0;   // newlines between the previous token (or comment) and this one
     std::vector<Comment> before;      // comments between the previous token and this one
+    bool        touchesPrev = false;  // no space or comment between the previous token and this one
+    bool        inElemType = false;   // part of an element type written `arr<int>`: the `<`, `>` and the names between them, which take no spaces
 };
 
 struct Scanned {
     std::vector<Piece>   pieces;
     std::vector<Comment> trailing;    // comments after the last token
 };
+
+// finds the element types `arr<int>`, `map<arr<str>>` and marks their pieces. only the written-together form counts, with a type name after the
+// `<`, so `arr < 3` and `if n<m` stay comparisons
+inline bool isTypeWord(const std::string& w) {
+    return w == "arr" || w == "array" || w == "map" || w == "num" || w == "number" || w == "float" || w == "double" || w == "int" ||
+           w == "integer" || w == "str" || w == "string" || w == "fn" || w == "func" || w == "function" || w == "ptr" || w == "pointer" || w == "any";
+}
+// the type name at i with an optional <...>; returns the index after it, or 0 when there is none. marks when `mark`
+inline size_t matchElemType(std::vector<Piece>& ps, size_t i, bool mark) {
+    if (i >= ps.size() || ps[i].type != TokenType::Identifier || !isTypeWord(ps[i].raw)) return 0;
+    const bool container = ps[i].raw == "arr" || ps[i].raw == "array" || ps[i].raw == "map";
+    if (!container || i + 1 >= ps.size() || ps[i + 1].type != TokenType::Less || !ps[i + 1].touchesPrev) return i + 1;
+    if (i + 2 >= ps.size() || !ps[i + 2].touchesPrev) return 0;
+    size_t after = matchElemType(ps, i + 2, mark);
+    if (after == 0 || after >= ps.size() || ps[after].type != TokenType::Greater || !ps[after].touchesPrev) return 0;
+    if (mark) { ps[i + 1].inElemType = true; ps[i + 2].inElemType = true; ps[after].inElemType = true; }
+    return after + 1;
+}
+inline void markElemTypes(std::vector<Piece>& ps) {
+    for (size_t i = 0; i + 1 < ps.size(); ++i) {
+        if (ps[i].type != TokenType::Identifier || !ps[i + 1].touchesPrev || ps[i + 1].type != TokenType::Less) continue;
+        size_t end = matchElemType(ps, i, false);
+        if (end > i + 1) { matchElemType(ps, i, true); i = end - 1; }
+    }
+}
 
 // splits src into tokens and the comments between them. throws embr::EmbrError if it doesn't lex.
 inline Scanned scan(const std::string& src) {
@@ -99,9 +126,11 @@ inline Scanned scan(const std::string& src) {
         p.raw = src.substr(start, end - start);
         p.newlinesBefore = nl;
         p.before = std::move(gap);
+        p.touchesPrev = start == prevEnd && !out.pieces.empty();
         out.pieces.push_back(std::move(p));
         prevEnd = end;
     }
+    markElemTypes(out.pieces);
     return out;
 }
 
@@ -117,6 +146,7 @@ inline bool isBinary(TokenType t) {
         case TokenType::Greater: case TokenType::Less: case TokenType::GreaterEqual: case TokenType::LessEqual:
         case TokenType::PlusEq: case TokenType::MinusEq: case TokenType::StarEq: case TokenType::SlashEq:
         case TokenType::RArrow: case TokenType::And: case TokenType::Or: case TokenType::In:
+        case TokenType::Pipe: case TokenType::Caret: case TokenType::LShift:
             return true;
         default: return false;
     }
@@ -169,15 +199,16 @@ struct Layout {
         if (cur == T::Comma || cur == T::RParen || cur == T::RBracket || cur == T::RCurly || cur == T::Colon) return false;
         if (prev == T::LParen || prev == T::LBracket || prev == T::LCurly) return false;
         if (cur == T::Dot || prev == T::Dot || prev == T::Ellipsis) return false;
+        if (cur == T::Ellipsis && isOperand(prev)) return false;   // a range, `[0...10]`; a rest parameter follows a comma or a bracket and keeps its space
         if (cur == T::LParen) return !(isOperand(prev) && prev != T::Number && prev != T::String) && prev != T::Fn;
         if (cur == T::LBracket) return !isOperand(prev);
         return true;
     }
 
-    // a piece is a prefix operator if it is ! or a - after something that isn't a value
+    // a piece is a prefix operator if it is ! or ~, or a - or & after something that isn't a value (`f(&x)` against `a & b`)
     bool isPrefix(TokenType cur) const {
-        if (cur == TokenType::Bang || cur == TokenType::Amp) return true;
-        return cur == TokenType::Minus && !isOperand(prev);
+        if (cur == TokenType::Bang || cur == TokenType::Tilde) return true;
+        return (cur == TokenType::Minus || cur == TokenType::Amp) && !isOperand(prev);
     }
 
     void addToken(const Piece& p, bool startsLine) {
@@ -187,7 +218,13 @@ struct Layout {
             lineIndent = indentLevel(p.type);
             // an fn used as a type name (x: fn) opens no block, see below
         }
-        if (needSpace(p.type)) line += ' ';
+        if (p.inElemType) { /* part of an element type: written together */ }
+        else if (p.type == T::Greater && prev == T::Greater && p.touchesPrev) { /* the two halves of a >> shift */ }
+        else if (needSpace(p.type)) line += ' ';
+        // no space after a prefix operator, unless the next token would glue to it into a different one (`! =` -> `!=`)
+        else if (unaryBefore && !line.empty() && !p.raw.empty() &&
+                 (((line.back() == '!' || line.back() == '-') && p.raw[0] == '=') || (line.back() == '-' && p.raw[0] == '>')))
+            line += ' ';
         line += p.raw;
         lineHasCode = true;
         bool prefix = isPrefix(p.type);

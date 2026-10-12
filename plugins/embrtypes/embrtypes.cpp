@@ -26,7 +26,7 @@
 //   - nil is a null pointer tagged "nil". same address as false but a different tag, and TypedPtr::operator==
 //     compares tags, so nil != false. nil is falsy like any null pointer
 //   - print(true) shows <bool 0x1>, not "true". a script that wants text spells it out
-//   - this is a convention, not a link between plugins: plugins/json/json.cpp builds its own true/false/nil the same
+//   - this is a convention, not a link between plugins: plugins/json/json.c builds its own true/false/nil the same
 //     way (same tags, same sentinel), so a value from either plugin is recognized by the other and compares equal.
 //     keep the two in sync if this representation ever changes. ffi.cpp reuses nil (via embrtypes.h) as
 //     "this call returns nothing"
@@ -78,7 +78,7 @@ EMBR_PLUGIN {
 
     // is_nil(v) -> int (0 or 1)
     interp->bindSig("is_nil", {pAny("v")},
-    [](const std::vector<Value>& args) -> Value { return Value(isNil(args[0]) ? 1.0 : 0.0); });
+    [](const std::vector<Value>& args) -> Value { return Value(isNil(args[0]) ? (int64_t)1 : (int64_t)0); });
 
     interp->bind("type_any",   [](const std::vector<Value>&) -> Value { return wrapDesc(kindOnly(TypeDesc::Kind::Any));   });
     interp->bind("type_num",   [](const std::vector<Value>&) -> Value { return wrapDesc(kindOnly(TypeDesc::Kind::Num));   });
@@ -90,7 +90,7 @@ EMBR_PLUGIN {
     // type_bool() -> desc
     //
     // shorthand for type_ptr("bool"); matches true/false from either this
-    // plugin or json.cpp's own true/false (same tag convention, see above).
+    // plugin or json.c's own true/false (same tag convention, see above).
     interp->bind("type_bool",
     [](const std::vector<Value>&) -> Value {
         TypeDesc d; d.kind = TypeDesc::Kind::Ptr; d.ptrTags.push_back("bool");
@@ -100,7 +100,7 @@ EMBR_PLUGIN {
     // type_nil() -> desc
     //
     // shorthand for type_ptr("nil"); matches nil from either this plugin or
-    // json.cpp's own null (same tag convention, see the file header comment).
+    // json.c's own null (same tag convention, see the file header comment).
     interp->bind("type_nil",
     [](const std::vector<Value>&) -> Value {
         TypeDesc d; d.kind = TypeDesc::Kind::Ptr; d.ptrTags.push_back("nil");
@@ -136,10 +136,10 @@ EMBR_PLUGIN {
     // a named-field shape. unlike type_map (one type for every value), each field has its own. works with
     // type_check/type_assert on any map, for example to check a parsed JSON object has the fields you expect
     //
-    // if every field is a fixed-width number (i8..f64) or another packable struct_type, offsets are computed
+    // if every field is a fixed-width number (i8..f64), a ptr or another packable struct_type, offsets are computed
     // with natural C alignment (computeStructLayout in embrtypes.h). such a struct works with buffer_pack/
     // buffer_unpack and as an arg/return type for ffi_call/ffi_prepare/ffi_callback (ffi.cpp builds and caches
-    // its libffi type on first use). with any other field (str, arr, map, fn, ptr, union, untyped) it is still a
+    // its libffi type on first use). a ptr field is pointer-sized and holds any pointer. with any other field (str, arr, map, fn, union, untyped) it is still a
     // fine type_check shape, but buffer_pack/buffer_unpack/ffi raise a clear error
     interp->bindSig("struct_type", {pArr("fields")},
     [](const std::vector<Value>& args) -> Value {
@@ -193,7 +193,7 @@ EMBR_PLUGIN {
     // buffer_len(buf) -> num
     interp->bindSig("buffer_len", {pPtr("buf")},
     [](const std::vector<Value>& args) -> Value {
-        return Value((double)requireBuffer(args[0], "buffer_len", "buf")->bytes.size());
+        return Value((int64_t)requireBuffer(args[0], "buffer_len", "buf")->bytes.size());
     });
 
     // buffer_get(buf, i: num) -> num  (a single byte, 0-255)
@@ -202,7 +202,7 @@ EMBR_PLUGIN {
         auto* b = requireBuffer(args[0], "buffer_get", "buf");
         int64_t i = numToInt64(args[1], "buffer", "index");
         checkBufIndex("buffer_get", *b, i);
-        return Value((double)b->bytes[(size_t)i]);
+        return Value((int64_t)b->bytes[(size_t)i]);
     });
 
     // buffer_set(buf, i: num, v: num)  (writes a single byte, v mod 256)
@@ -326,7 +326,7 @@ EMBR_PLUGIN {
     interp->bindSig("type_check", {pAny("desc"), pAny("value")},
     [](const std::vector<Value>& args) -> Value {
         const TypeDesc& d = *requireDesc(args[0], "type_check", "desc");
-        return Value(matches(d, args[1]) ? 1.0 : 0.0);
+        return Value(matches(d, args[1]) ? (int64_t)1 : (int64_t)0);
     });
 
     // type_assert(desc, value, msg?: str) -> value
@@ -395,4 +395,56 @@ EMBR_PLUGIN {
         };
         return wrapDesc(infer(args[0]));
     });
+
+    // what each always returns (see Value::Callable::returns)
+    interp->setResultTypes({
+        {"type_check", TS::Int}, {"type_name", TS::Str}, {"buffer", TS::Ptr}, {"buffer_from_str", TS::Ptr}, {"buffer_to_str", TS::Str},
+        {"buffer_len", TS::Int}, {"buffer_get", TS::Int}, {"buffer_set", TS::Float}, {"buffer_slice", TS::Ptr}, {"buffer_concat", TS::Ptr},
+        {"buffer_pack", TS::Ptr},
+    });
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("embrtypes", "1.0.0", "runtime type descriptors, bool/nil, and raw buffers", EMBR_CAP_NONE, EMBR_CAP_NONE,
+    {"buffer", "zero-arg constructors"},
+    {"buffer_concat", "a new buffer holding a followed by b"},
+    {"buffer_fill", "sets every byte of the buffer to v (mod 256) and gives the buffer back"},
+    {"buffer_from_str", "a new buffer with the bytes of the string"},
+    {"buffer_get", "single byte 0–255 (v mod 256 on write); raises out of range"},
+    {"buffer_len", "the number of bytes in the buffer"},
+    {"buffer_pack", "raises if desc isn't packable, or buf too small. an integer that doesn't fit its field (300 for u8, -1 for u16, 1.5 for i32) raises and names the field, it is never cut down to its low bytes"},
+    {"buffer_set", "single byte 0–255 (v mod 256 on write); raises out of range"},
+    {"buffer_slice", "new independent copy"},
+    {"buffer_to_str", "the bytes of the buffer as a string"},
+    {"buffer_unpack", "raises if desc isn't packable, or buf too small. an integer that doesn't fit its field (300 for u8, -1 for u16, 1.5 for i32) raises and names the field, it is never cut down to its low bytes"},
+    {"is_nil", "1 if v is the nil value, else 0"},
+    {"make_false", "zero-arg natives, for while_do-style re-evaluated conditions"},
+    {"make_true", "zero-arg natives, for while_do-style re-evaluated conditions"},
+    {"struct_type", "computes natural-alignment layout; raises on an empty field list or malformed field shape"},
+    {"type_any", "the descriptor that accepts any value"},
+    {"type_arr", "homogeneous container descriptors"},
+    {"type_assert", "raises (catchable) on mismatch; passes value through unchanged on match"},
+    {"type_bool", "the descriptor for a true or false value"},
+    {"type_buffer", "the descriptor for a buffer"},
+    {"type_check", "1 if the value fits the descriptor, else 0"},
+    {"type_f32", "the descriptor for a 32-bit float"},
+    {"type_f64", "the descriptor for a 64-bit float"},
+    {"type_float", "the descriptor for a float"},
+    {"type_fn", "the descriptor for a function"},
+    {"type_i16", "the descriptor for a signed 16-bit integer"},
+    {"type_i32", "the descriptor for a signed 32-bit integer"},
+    {"type_i64", "the descriptor for a signed 64-bit integer"},
+    {"type_i8", "the descriptor for a signed 8-bit integer"},
+    {"type_int", "the descriptor for an int"},
+    {"type_map", "homogeneous container descriptors"},
+    {"type_name", "human-readable (describe())"},
+    {"type_nil", "the descriptor for the nil value"},
+    {"type_num", "the descriptor for an int or a float"},
+    {"type_of", "best-effort shallow inference"},
+    {"type_ptr", "0 tags = any pointer; 1 = exact match; 2+ = union"},
+    {"type_str", "the descriptor for a string"},
+    {"type_u16", "the descriptor for an unsigned 16-bit integer"},
+    {"type_u32", "the descriptor for an unsigned 32-bit integer"},
+    {"type_u64", "the descriptor for an unsigned 64-bit integer"},
+    {"type_u8", "the descriptor for an unsigned 8-bit integer"},
+    {"type_union", "raises if fewer than 2 alternatives"});

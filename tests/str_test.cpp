@@ -14,6 +14,14 @@ int main() {
           "print(str_split(\"abc\", \"\"))\n",
           "[\"a\", \"b\", \"c\"]\n" },
 
+        // replacing inside one string shifted the tail on every match: a 3 MB string with 280,000 matches took many seconds
+        { "str_replace: many matches in a long string stay linear",
+          "s = str_repeat(\"The quick brown fox, jumps over the lazy dog. \", 70000)\n"
+          "r = str_replace(s, \"fox\", \"wolf\")\n"
+          "print(str_count(r, \"wolf\"))\nprint(str_count(r, \"fox\"))\nprint(str_find(r, \"wolf, jumps\"))\n"
+          "print(str_endswith(r, \"lazy dog. \"))\n",
+          "70000\n0\n16\n1\n" },
+
         { "str_replace: replaces every occurrence",
           "print(str_replace(\"a-b-c\", \"-\", \"_\"))\n",
           "a_b_c\n" },

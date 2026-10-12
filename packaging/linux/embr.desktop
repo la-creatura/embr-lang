@@ -1,0 +1,13 @@
+# the menu entry install.sh puts in your applications folder. @OPEN@ is filled in with the path of the launcher.
+# with a file it runs the file in a terminal, with no file it opens the repl.
+[Desktop Entry]
+Type=Application
+Name=embr
+GenericName=embr scripts
+Comment=run embr scripts and open the embr repl
+Exec="@OPEN@" %f
+Icon=embr
+Terminal=true
+Categories=Development;ConsoleOnly;
+Keywords=embr;script;repl;
+MimeType=text/x-embr;application/x-embr-bytecode;application/x-embr-package;

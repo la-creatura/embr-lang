@@ -1,4 +1,4 @@
-// unit tests for plugins/csv/csv.cpp
+// unit tests for plugins/csv/csv.c
 
 #include "harness.h"
 

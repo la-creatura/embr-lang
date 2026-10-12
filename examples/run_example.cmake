@@ -1,8 +1,8 @@
 # runs one example script and compares its stdout with the golden file. stderr (the
 # "[runtime] loaded plugin" banners, diagnostics) is deliberately not compared.
-#   cmake -DEMBR=... [-DVM_FLAG=--vm] -DSCRIPT=... -DEXPECTED=... -P run_example.cmake
+#   cmake -DEMBR=... -DBACKEND=vm -DSCRIPT=... -DEXPECTED=... -P run_example.cmake
 execute_process(
-    COMMAND ${EMBR} ${VM_FLAG} ${SCRIPT}
+    COMMAND ${EMBR} --backend=${BACKEND} ${SCRIPT}
     OUTPUT_VARIABLE actual
     ERROR_VARIABLE  err
     RESULT_VARIABLE rc

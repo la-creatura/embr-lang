@@ -249,8 +249,8 @@ EMBR_PLUGIN {
 
     // os_getenv(name: str, default?: str) -> str
     // raises if the variable is unset and no default was given
-    interp->bindSig("os_getenv", {pStr("name"), pOpt("default", TS::Str)},
-    [](const std::vector<Value>& args) -> Value {
+    interp->bindSpan("os_getenv", {pStr("name"), pOpt("default", TS::Str)},
+    [](const ArgSpan& args) -> Value {
         const char* v = std::getenv(args[0].asString().c_str());
         if (v) return Value(std::string(v));
         if (args.size() >= 2) return args[1];
@@ -258,15 +258,15 @@ EMBR_PLUGIN {
     });
 
     // os_has_env(name: str) -> num   (1/0)
-    interp->bindSig("os_has_env", {pStr("name")},
-    [](const std::vector<Value>& args) -> Value {
-        return Value(std::getenv(args[0].asString().c_str()) ? 1.0 : 0.0);
+    interp->bindSpan("os_has_env", {pStr("name")},
+    [](const ArgSpan& args) -> Value {
+        return Value(std::getenv(args[0].asString().c_str()) ? (int64_t)1 : (int64_t)0);
     });
 
     // os_setenv(name: str, value: str) -> 0
     // affects this process and any subprocess started afterwards (os_exec)
-    interp->bindSig("os_setenv", {pStr("name"), pStr("value")},
-    [](const std::vector<Value>& args) -> Value {
+    interp->bindSpan("os_setenv", {pStr("name"), pStr("value")},
+    [](const ArgSpan& args) -> Value {
         const std::string& n = args[0].asString();
         if (n.empty() || n.find('=') != std::string::npos || n.find('\0') != std::string::npos)
             fail("os_setenv", "invalid variable name '" + n + "'");
@@ -280,8 +280,8 @@ EMBR_PLUGIN {
     });
 
     // os_unsetenv(name: str) -> 0   (no error if it wasn't set)
-    interp->bindSig("os_unsetenv", {pStr("name")},
-    [](const std::vector<Value>& args) -> Value {
+    interp->bindSpan("os_unsetenv", {pStr("name")},
+    [](const ArgSpan& args) -> Value {
         const std::string& n = args[0].asString();
         if (n.empty() || n.find('=') != std::string::npos)
             fail("os_unsetenv", "invalid variable name '" + n + "'");
@@ -294,8 +294,8 @@ EMBR_PLUGIN {
     });
 
     // os_environ() -> map of every environment variable
-    interp->bindSig("os_environ", {},
-    [](const std::vector<Value>&) -> Value {
+    interp->bindSpan("os_environ", {},
+    [](const ArgSpan&) -> Value {
         Value::map_type m;
 #if !defined(_WIN32)
         for (char** e = environ; e && *e; ++e) {
@@ -321,16 +321,16 @@ EMBR_PLUGIN {
     // os_args() -> arr of str
     // the arguments after a bare `--` on the embr command line:
     //   embr script.embr -- a b   ->   ["a", "b"]
-    interp->bindSig("os_args", {},
-    [interp](const std::vector<Value>&) -> Value {
+    interp->bindSpan("os_args", {},
+    [interp](const ArgSpan&) -> Value {
         Value::array_type out;
         for (const auto& a : interp->scriptArgs) out.push_back(Value(a));
         return Value(std::move(out));
     });
 
     // os_cwd() -> str
-    interp->bindSig("os_cwd", {},
-    [](const std::vector<Value>&) -> Value {
+    interp->bindSpan("os_cwd", {},
+    [](const ArgSpan&) -> Value {
         std::error_code ec;
         auto p = std::filesystem::current_path(ec);
         if (ec) fail("os_cwd", ec.message());
@@ -338,8 +338,8 @@ EMBR_PLUGIN {
     });
 
     // os_pid() -> num
-    interp->bindSig("os_pid", {},
-    [](const std::vector<Value>&) -> Value {
+    interp->bindSpan("os_pid", {},
+    [](const ArgSpan&) -> Value {
 #if defined(_WIN32)
         return Value((int64_t)_getpid());
 #else
@@ -348,8 +348,8 @@ EMBR_PLUGIN {
     });
 
     // os_platform() -> "linux" | "macos" | "windows" | "unknown"
-    interp->bindSig("os_platform", {},
-    [](const std::vector<Value>&) -> Value {
+    interp->bindSpan("os_platform", {},
+    [](const ArgSpan&) -> Value {
 #if defined(_WIN32)
         return Value(std::string("windows"));
 #elif defined(__APPLE__)
@@ -364,8 +364,8 @@ EMBR_PLUGIN {
     // os_exit(code?: num) -> never returns
     // flushes stdout then ends the whole process with the given status
     // (default 0; the OS keeps only the low 8 bits). not catchable by try/catch.
-    interp->bindSig("os_exit", {pOpt("code", TS::Num)},
-    [](const std::vector<Value>& args) -> Value {
+    interp->bindSpan("os_exit", {pOpt("code", TS::Num)},
+    [](const ArgSpan& args) -> Value {
         int code = 0;
         if (!args.empty()) {
             double d = args[0].asNumber();
@@ -381,8 +381,8 @@ EMBR_PLUGIN {
     // `input` to its stdin, and waits for it. code is the exit status, or
     // -N if the process was killed by signal N. a program that can't be
     // started raises; one that runs and fails just reports a nonzero code.
-    interp->bindSig("os_exec", {pArr("argv"), pOpt("input", TS::Str)},
-    [](const std::vector<Value>& args) -> Value {
+    interp->bindSpan("os_exec", {pArr("argv"), pOpt("input", TS::Str)},
+    [](const ArgSpan& args) -> Value {
         std::vector<std::string> argv;
         for (size_t i = 0; i < args[0].asArray().size(); ++i) {
             const Value& a = args[0].asArray()[i];
@@ -393,4 +393,25 @@ EMBR_PLUGIN {
         if (argv.empty()) fail("os_exec", "argv must not be empty");
         return execProcess(argv, args.size() >= 2 ? args[1].asString() : std::string());
     });
+
+    // what each always returns (see Value::Callable::returns)
+    interp->setResultTypes({
+        {"os_has_env", TS::Int}, {"os_setenv", TS::Float}, {"os_unsetenv", TS::Float}, {"os_environ", TS::Map},
+        {"os_args", TS::Arr}, {"os_cwd", TS::Str}, {"os_pid", TS::Int}, {"os_platform", TS::Str},
+    });
+    interp->setResultElems({{"os_args", TS::Str}});
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("os", "1.0.0", "environment, arguments, process", EMBR_CAP_PROCESS | EMBR_CAP_ENV, EMBR_CAP_NONE,
+    {"os_args", "arguments after a bare --: embr script.embr -- a b → [\"a\", \"b\"] (stored in Interpreter::scriptArgs; embr pkg keeps its own arg handling; parallel worker interpreters see [])"},
+    {"os_cwd", "os_cwd returns / separators on Windows too. platform is \"linux\", \"macos\", \"windows\" or \"unknown\""},
+    {"os_environ", "snapshot of all variables"},
+    {"os_exec", "runs a program directly (PATH lookup, no shell), feeds input to stdin, returns {code, stdout, stderr}; code is -N if killed by signal N (POSIX only, Windows reports the plain exit code); a program that can't start raises, one that exits nonzero does not. stdout/stderr/stdin are pumped concurrently (no deadlock on large data). on Windows it uses CreateProcess, so argv[0] must be a real program (cmd, findstr), not a shell builtin or sh"},
+    {"os_exit", "flushes stdout then ends the process; not catchable by try/catch"},
+    {"os_getenv", "raises if unset and no default (there is no nil core type, see the type system)"},
+    {"os_has_env", "1 if the environment variable is set, else 0"},
+    {"os_pid", "os_cwd returns / separators on Windows too. platform is \"linux\", \"macos\", \"windows\" or \"unknown\""},
+    {"os_platform", "os_cwd returns / separators on Windows too. platform is \"linux\", \"macos\", \"windows\" or \"unknown\""},
+    {"os_setenv", "affects this process and later os_exec children; invalid names (empty, containing =) raise"},
+    {"os_unsetenv", "affects this process and later os_exec children; invalid names (empty, containing =) raise"});

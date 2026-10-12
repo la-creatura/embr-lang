@@ -1,5 +1,5 @@
 // unit tests for dunder dispatch (core/registry.h: dunderName/resolveDunder/arithDunderOp/lookupMapChain, used by
-// tree_walker.h's doInvoke/evalBinary/evalIndex and vm.h's Op::CALL, arithmetic opcodes and Op::INDEX_GET)
+// vm.h's Op::CALL, arithmetic opcodes and Op::INDEX_GET)
 //
 // it's a core feature with no plugin of its own, but testing it needs a tagged pointer to hang a dunder on, so
 // embrtypes' descriptors (tag "types.desc") and table() handles (tag "table.handle") are used as fixtures
@@ -52,6 +52,36 @@ int main() {
           "print(d(5))\n",
           "called with 5\n" },
 
+        { "dunder index: v[k] on a typed pointer calls __tag_index(v, k) as an ordinary call, also inside a function",
+          "fn __types_desc_index(d, k)\n    return \"idx \" + str(k)\nend\n"
+          "d = type_int()\nprint(d[3])\nprint(d[\"a\"])\n"
+          "fn look(p, i)\n    return p[i] + \"!\"\nend\nprint(look(d, 9))\n",
+          "idx 3\nidx a\nidx 9!\n" },
+
+        { "dunder index: without __tag_index a typed pointer still can't be indexed, and the error says so",
+          "d = type_int()\ntry\n    print(d[0])\ncatch e\n    print(\"caught\")\nend\n",
+          "caught\n" },
+
+        { "dunder setindex: v[k] = x calls __tag_setindex(v, k, x), and what it returns is stored back into the variable",
+          "fn __types_desc_setindex(d, k, v)\n    print(\"set\", k, v)\n    return d\nend\n"
+          "fn __types_desc_index(d, k)\n    return \"idx \" + str(k)\nend\n"
+          "d = type_int()\nd[1] = 5\nd[\"k\"] = \"v\"\nprint(d[0])\n"
+          "fn put(p)\n    p[2] = 7\n    return p[2]\nend\nprint(put(d))\n",
+          "set 1 5\nset k v\nidx 0\nset 2 7\nidx 2\n" },
+
+        { "dunder iter: for x in v calls __tag_iter(v) and loops over what it returns (an array, a map or a string)",
+          "fn __types_desc_iter(d)\n    return [7, 8, 9]\nend\n"
+          "for x in type_int()\n    print(x)\nend\n"
+          "fn __table_handle_iter(t)\n    return {\"a\": 1}\nend\n"
+          "for k in table()\n    print(k)\nend\n",
+          "7\n8\n9\na\n" },
+
+        { "dunder arithmetic: a script dunder gets a frame of its own and the result goes where the operator's result would",
+          "fn __types_desc_add(a, b)\n    return \"sum\"\nend\n"
+          "d = type_int()\nx = d + 1\nprint(x)\nprint((d + d) + 2)\n"
+          "fn twice(p)\n    return p + p\nend\nprint(twice(d))\n",
+          "sum\nsum2\nsum\n" },
+
         { "dunder call: still raises cleanly when no __tag_call is defined for the tag",
           "t = table()\n"
           "try\n"
@@ -84,6 +114,17 @@ int main() {
           "end\n"
           "print(-type_int())\n",
           "negated\n" },
+
+        { "dunder: the bit operators go through __tag_band, bor, bxor, shl, shr and bnot",
+          "fn __types_desc_band(a, b)\n    return \"band\"\nend\n"
+          "fn __types_desc_bor(a, b)\n    return \"bor\"\nend\n"
+          "fn __types_desc_bxor(a, b)\n    return \"bxor\"\nend\n"
+          "fn __types_desc_shl(a, b)\n    return \"shl\"\nend\n"
+          "fn __types_desc_shr(a, b)\n    return \"shr\"\nend\n"
+          "fn __types_desc_bnot(a)\n    return \"bnot\"\nend\n"
+          "t = type_int()\n"
+          "print(t & 1, t | 1, t ^ 1, 1 << t, t >> 1, ~t)\n",
+          "band bor bxor shl shr bnot\n" },
 
         { "dunder unary: still raises cleanly when no __tag_neg is defined for the tag",
           "try\n"
@@ -257,15 +298,76 @@ int main() {
         { "sort(): still raises cleanly for a mixed-tag array (no single shared tag)",
           "try\nsort([type_int(), table()])\nprint(\"unreachable\")\ncatch e\nprint(\"caught\")\nend\n",
           "caught\n" },
+        { "dunder arithmetic and comparison: every operator that can be taken over, with the typed pointer on the left or on the right",
+          "fn __types_desc_sub(a, b)\n"
+          "    return \"sub\"\n"
+          "end\n"
+          "fn __types_desc_mul(a, b)\n"
+          "    return \"mul\"\n"
+          "end\n"
+          "fn __types_desc_div(a, b)\n"
+          "    return \"div\"\n"
+          "end\n"
+          "fn __types_desc_mod(a, b)\n"
+          "    return \"mod\"\n"
+          "end\n"
+          "fn __types_desc_lt(a, b)\n"
+          "    return \"lt\"\n"
+          "end\n"
+          "fn __types_desc_gt(a, b)\n"
+          "    return \"gt\"\n"
+          "end\n"
+          "fn __types_desc_lte(a, b)\n"
+          "    return \"lte\"\n"
+          "end\n"
+          "fn __types_desc_gte(a, b)\n"
+          "    return \"gte\"\n"
+          "end\n"
+          "d = type_int()\n"
+          "print([d - 1, d * 2, d / 3, d % 4, d < 5, d > 6, d <= 7, d >= 8])\n"
+          "print([1 - d, 2 * d, 3 / d, 4 % d, 5 < d, 6 > d, 7 <= d, 8 >= d])\n"
+          "fn cmp(a, b)\n"
+          "    if a < b\n"
+          "        return \"yes\"\n"
+          "    end\n"
+          "    return \"no\"\n"
+          "end\n"
+          "print(cmp(d, d))\n",
+          "[\"sub\", \"mul\", \"div\", \"mod\", \"lt\", \"gt\", \"lte\", \"gte\"]\n[\"sub\", \"mul\", \"div\", \"mod\", \"lt\", \"gt\", \"lte\", \"gte\"]\nyes\n" },
+        { "dunder: a comparison or arithmetic with no dunder defined names the operator and the types",
+          "d = type_int()\n"
+          "try\n"
+          "    print(d < d)\n"
+          "catch e\n"
+          "    print(e[\"message\"])\n"
+          "end\n"
+          "try\n"
+          "    print(d * 2)\n"
+          "catch e\n"
+          "    print(e[\"message\"])\n"
+          "end\n",
+          "unsupported operands for '<': pointer and pointer\nunsupported operands for '*': pointer and int\n" },
+        { "operators on values the checker can't see (from json_parse) raise a clear error naming the operator and both types",
+          "vals = json_parse(\"[[1], {}, \\\"s\\\"]\")\n"
+          "fs = [fn(x) return x - 1 end, fn(x) return x * 2 end, fn(x) return x / 2 end, fn(x) return x % 2 end, fn(x) return x < 1 end, fn(x) return x <= 1 end, fn(x) return x > 1 end, fn(x) return x >= 1 end, fn(x) return -x end]\n"
+          "for v in vals\n"
+          "    for f in fs\n"
+          "        try\n"
+          "            print(f(v))\n"
+          "        catch e\n"
+          "            print(e[\"message\"])\n"
+          "        end\n"
+          "    end\n"
+          "end\n",
+          "unsupported operands for \'-\': array and int\nunsupported operands for \'*\': array and int\nunsupported operands for \'/\': array and int\nunsupported operands for \'%\': array and int\nunsupported operands for \'<\': array and int\nunsupported operands for \'<=\': array and int\nunsupported operands for \'>\': array and int\nunsupported operands for \'>=\': array and int\nunsupported operand for unary \'-\': array\nunsupported operands for \'-\': map and int\nunsupported operands for \'*\': map and int\nunsupported operands for \'/\': map and int\nunsupported operands for \'%\': map and int\nunsupported operands for \'<\': map and int\nunsupported operands for \'<=\': map and int\nunsupported operands for \'>\': map and int\nunsupported operands for \'>=\': map and int\nunsupported operand for unary \'-\': map\nunsupported operands for \'-\': string and int\nunsupported operands for \'*\': string and int\nunsupported operands for \'/\': string and int\nunsupported operands for \'%\': string and int\nunsupported operands for \'<\': string and int\nunsupported operands for \'<=\': string and int\nunsupported operands for \'>\': string and int\nunsupported operands for \'>=\': string and int\nunsupported operand for unary \'-\': string\n" },
     };
 
-    embr::Interpreter interp;
-    for (const auto& p : {"embrtypes", "json", "table", "embrlib", "ffi", "str"})
-        embr_test::runSourceAny(std::string("import \"") + p + "\"", interp, "");
+    const std::vector<std::string> plugins = {"embrtypes", "json", "table", "embrlib", "ffi", "str"};
 
     int passed = rawOk ? 1 : 0, failed = rawOk ? 0 : 1;
     for (const auto& t : tests) {
-        auto r = embr_test::runTest(t, interp);
+        auto interp = embr_test::freshInterpreter(plugins);
+        auto r = embr_test::runTest(t, *interp);
         embr_test::printResult(r);
         r.passed ? ++passed : ++failed;
     }

@@ -4,21 +4,28 @@ import "hello"
 print(hello_greet("wowwd"))
 print(hello_greet("embr", "Hi"))
 
+# two functions, hello_describe__1 and hello_describe__2, are one name: embr picks by the argument
+print(hello_describe("abc"))
+print(hello_describe(21))
+
 c = hello_counter()
 hello_counter_add(c, 5)
 hello_counter_add(c, 37)
 print(hello_counter_get(c))
 
-# the handle is opaque and unforgeable: a map pretending to be one is rejected
+# the handle is opaque and unforgeable: a map pretending to be one is rejected. (the values are kept as `any`, so that it is
+# the run-time check you see: embr already refuses an argument it can tell is wrong before the script runs)
+local any forged = {"__type": "hello.counter"}
+local any five = 5
 try
-    hello_counter_get({"__type": "hello.counter"})
+    hello_counter_get(forged)
 catch e
     print("rejected a forged handle")
 end
 
 # arity and types are checked for you by bindSig()
 try
-    hello_greet(5)
+    hello_greet(five)
 catch e
     print("rejected a non-string")
 end

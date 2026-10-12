@@ -103,7 +103,7 @@ contexts:
       scope: keyword.control.import.embr
     - match: '\bfn\b'
       scope: storage.type.function.embr
-    - match: '\b(?:local|auto)\b'
+    - match: '\b(?:local|const|auto)\b'
       scope: storage.modifier.embr
     - match: '\b(?:and|or)\b'
       scope: keyword.operator.logical.embr
@@ -120,6 +120,8 @@ contexts:
   operators:
     - match: '\+=|-=|\*=|/='
       scope: keyword.operator.assignment.compound.embr
+    - match: '<<|[|^~]'
+      scope: keyword.operator.bitwise.embr
     - match: '==|!=|<=|>=|<|>'
       scope: keyword.operator.comparison.embr
     - match: '\.\.\.'

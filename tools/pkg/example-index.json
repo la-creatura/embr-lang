@@ -1,0 +1,36 @@
+{
+  "netpkg": {
+    "latest": "1.1.0",
+    "versions": {
+      "1.0.0": {
+        "url": "/artifacts/netpkg-1.0.0.embr",
+        "type": "embr",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "description": "fetches things over http",
+        "capabilities": ["network"]
+      },
+      "1.1.0": {
+        "url": "/artifacts/netpkg-1.1.0.embr",
+        "type": "embr",
+        "description": "fetches things over http, with retries",
+        "capabilities": ["filesystem", "network"],
+        "deps": { "pure": "1.0.0" }
+      }
+    }
+  },
+  "pure": {
+    "versions": {
+      "1.0.0": { "url": "/artifacts/pure-1.0.0.embr", "type": "embr", "capabilities": [] }
+    }
+  },
+  "fastmath": {
+    "latest": "2.0.0",
+    "versions": {
+      "2.0.0": {
+        "url": "https://github.com/example/fastmath/releases/download/v2.0.0/fastmath.so",
+        "type": "plugin",
+        "capabilities": ["native"]
+      }
+    }
+  }
+}

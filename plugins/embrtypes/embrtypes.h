@@ -20,7 +20,7 @@ using embr::raiseError;
 
 // the fixed address used for true. it's a literal, not `&someGlobal`, so every plugin .so that builds a true
 // uses the same bits (a global's address differs per loaded .so). that way a true from this plugin and one
-// from json.cpp compare equal. never dereferenced, only compared. any future truthy-only sentinel should do the same
+// from json.c compare equal. never dereferenced, only compared. any future truthy-only sentinel should do the same
 // see embrtypes.cpp's header for why true/false are a "bool" tagged pointer
 inline void* const g_truthySentinel = reinterpret_cast<void*>(1);
 inline Value makeBool(bool b) { return Value::makePointer(b ? g_truthySentinel : nullptr, "bool"); }
@@ -75,6 +75,35 @@ inline bool fixedWidth(TypeDesc::Kind k, FixedWidth& out) {
         case TypeDesc::Kind::F64: out = {8, false, true};  return true;
         default: return false;
     }
+}
+
+// the integer `v` stands for, when it fits a fixed-width integer type exactly. anything that would lose bytes on the way
+// into memory raises: a fraction, a negative value for an unsigned type, a value outside the type's range. buffer_pack,
+// ptr_write and every ffi integer (arguments and callback results) go through here. `what` names the value in the message
+inline int64_t intForWidth(const Value& v, const FixedWidth& w, const std::string& tname, const std::string& ctx,
+                           const std::string& what) {
+    if (!v.isNumeric()) raiseError(ctx, what + ": expects " + tname + ", got " + v.typeName());
+    int64_t iv;
+    if (v.isInt()) {
+        iv = v.asInt();
+    } else {
+        const double x = v.asNumber();
+        if (!(x >= -9223372036854775808.0 && x < 9223372036854775808.0))   // 2^63 is exact as a double
+            raiseError(ctx, what + ": number " + std::to_string(x) + " is out of integer range");
+        iv = (int64_t)x;
+        if ((double)iv != x)
+            raiseError(ctx, what + ": type " + tname + " is integer but got non-integer value " + std::to_string(x));
+    }
+    if (!w.isSigned && iv < 0) raiseError(ctx, what + ": type " + tname + " is unsigned but got negative value");
+    if (w.size < 8) {
+        const int bits = (int)w.size * 8;
+        const int64_t lo = w.isSigned ? -(int64_t(1) << (bits - 1)) : 0;
+        const int64_t hi = w.isSigned ? (int64_t(1) << (bits - 1)) - 1 : (int64_t(1) << bits) - 1;
+        if (iv < lo || iv > hi)
+            raiseError(ctx, what + ": " + std::to_string(iv) + " does not fit in type " + tname +
+                       " (" + std::to_string(lo) + " to " + std::to_string(hi) + ")");
+    }
+    return iv;
 }
 
 inline Value wrapDesc(TypeDesc d) {
@@ -208,20 +237,26 @@ inline std::string describe(const TypeDesc& d) {
     return "?";
 }
 
+// size and alignment of a field that has a fixed layout: a fixed-width number, a pointer (any `ptr` field, pointer-sized)
+// or a packable struct (its own alignment, not its size). false for anything else
+inline bool fieldLayout(const TypeDesc& t, size_t& size, size_t& align) {
+    FixedWidth w;
+    if (fixedWidth(t.kind, w)) { size = align = w.size; return true; }
+    if (t.kind == TypeDesc::Kind::Ptr) { size = align = sizeof(void*); return true; }
+    if (t.kind == TypeDesc::Kind::Struct && t.structSize > 0) { size = t.structSize; align = t.structAlignment; return true; }
+    return false;
+}
+
 // fills in a Struct descriptor's fields and layout. offsets use natural alignment (each field at the next offset
-// divisible by its size, the struct padded to its widest member). if any field isn't fixed-width, structSize stays
-// 0 ("not packable") instead of raising, so struct_type() still works for plain shape checks
-// shared by struct_type() and any plugin (ffi.cpp) that builds one in C++
+// divisible by its alignment, the struct padded to its widest member). if any field has no fixed layout (see
+// fieldLayout), structSize stays 0 ("not packable") instead of raising, so struct_type() still works for plain
+// shape checks. shared by struct_type() and any plugin (ffi.cpp) that builds one in C++
 inline void computeStructLayout(TypeDesc& d) {
     size_t offset = 0, maxAlign = 1;
     bool packable = true;
     for (auto& f : d.fields) {
-        FixedWidth w;
-        size_t fsize;
-        if (fixedWidth(f.type->kind, w)) fsize = w.size;
-        else if (f.type->kind == TypeDesc::Kind::Struct && f.type->structSize > 0) fsize = f.type->structSize;
-        else { packable = false; break; }
-        size_t align = fsize;
+        size_t fsize, align;
+        if (!fieldLayout(*f.type, fsize, align)) { packable = false; break; }
         offset = (offset + align - 1) / align * align;
         f.offset = offset;
         offset += fsize;
@@ -236,17 +271,18 @@ inline void computeStructLayout(TypeDesc& d) {
 // the byte size a descriptor packs into, or a raised error if it can't
 // (only fixed-width numeric kinds and structs built entirely from packable
 // fields qualify, see struct_type()'s doc comment in embrtypes.cpp)
-inline size_t packedSize(const TypeDesc& d, const std::string& ctx) {
+inline size_t packedSize(const TypeDesc& d, const char* ctx) {
     FixedWidth w;
     if (fixedWidth(d.kind, w)) return w.size;
+    if (d.kind == TypeDesc::Kind::Ptr) return sizeof(void*);
     if (d.kind == TypeDesc::Kind::Struct && d.structSize > 0) return d.structSize;
     raiseError(ctx, "type '" + describe(d) + "' has no fixed binary size "
-               "(only i8..f64 fields, and structs built entirely from them, can be packed)");
+               "(only i8..f64 and ptr fields, and structs built entirely from them, can be packed)");
 }
 
 // Value -> raw memory, per a packable descriptor (fixed-width numeric or a
 // packable struct). recurses into nested struct fields.
-inline void packInto(uint8_t* dst, const TypeDesc& d, const Value& v, const std::string& ctx) {
+inline void packInto(uint8_t* dst, const TypeDesc& d, const Value& v, const char* ctx, const std::string& what = "value") {
     if (d.kind == TypeDesc::Kind::Struct) {
         if (!v.isMap())
             raiseError(ctx, "expected a map for struct '" + describe(d) + "', got " + v.typeName());
@@ -255,8 +291,14 @@ inline void packInto(uint8_t* dst, const TypeDesc& d, const Value& v, const std:
             auto it = m.find(f.name);
             if (it == m.end())
                 raiseError(ctx, "struct '" + describe(d) + "' missing field '" + f.name + "'");
-            packInto(dst + f.offset, *f.type, it->second, ctx);
+            packInto(dst + f.offset, *f.type, it->second, ctx, "field '" + f.name + "'");
         }
+        return;
+    }
+    if (d.kind == TypeDesc::Kind::Ptr) {
+        if (!v.isPointer()) raiseError(ctx, "expected a ptr for " + what + ", got " + v.typeName());
+        void* p = v.asPointer().ptr;
+        memcpy(dst, &p, sizeof(void*));
         return;
     }
     FixedWidth w;
@@ -269,8 +311,7 @@ inline void packInto(uint8_t* dst, const TypeDesc& d, const Value& v, const std:
         else              {                     memcpy(dst, &x, 8); }
         return;
     }
-    if (!v.isNumeric()) raiseError(ctx, "expected a number for " + describe(d) + ", got " + v.typeName());
-    int64_t iv = v.isInt() ? v.asInt() : (int64_t)v.asNumber();
+    int64_t iv = intForWidth(v, w, describe(d), ctx, what);
     switch (w.size) {
         case 1: { uint8_t  x = (uint8_t) iv; memcpy(dst, &x, 1); } break;
         case 2: { uint16_t x = (uint16_t)iv; memcpy(dst, &x, 2); } break;
@@ -280,11 +321,15 @@ inline void packInto(uint8_t* dst, const TypeDesc& d, const Value& v, const std:
 }
 
 // raw memory -> Value, the inverse of packInto
-inline Value unpackFrom(const uint8_t* src, const TypeDesc& d, const std::string& ctx) {
+inline Value unpackFrom(const uint8_t* src, const TypeDesc& d, const char* ctx) {
     if (d.kind == TypeDesc::Kind::Struct) {
         Value::map_type m;
         for (auto& f : d.fields) m[f.name] = unpackFrom(src + f.offset, *f.type, ctx);
         return Value(std::move(m));
+    }
+    if (d.kind == TypeDesc::Kind::Ptr) {
+        void* p; memcpy(&p, src, sizeof(void*));
+        return Value::makePointer(p);
     }
     FixedWidth w;
     if (!fixedWidth(d.kind, w))
@@ -328,7 +373,7 @@ inline Value makeBuffer(std::vector<uint8_t> bytes) {
 inline Buffer* requireBuffer(const Value& v, const std::string& caller, const std::string& argname) {
     if (!v.isPointer() || v.asPointer().type != "types.buffer")
         raiseError(caller, "'" + argname + "' must be a buffer (from buffer()/buffer_from_str()), got " + v.typeName());
-    return static_cast<Buffer*>(v.asPointer().owner.get());
+    return static_cast<Buffer*>(v.asPointer().ownerPtr());
 }
 
 } // namespace embrtypes

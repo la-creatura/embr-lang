@@ -75,7 +75,7 @@ int main() {
           "1 0 0\n" },
 
         { "vec: errors are catchable (bounds, empty pop, wrong type)",
-          "v = vec_from([1])\n"
+          "fn lh(v) return v end v = vec_from([1])\n"
           "try vec_get(v, 1) catch e print(\"get\") end\n"
           "try vec_get(v, -1) catch e print(\"neg\") end\n"
           "try vec_set(v, 5, 0) catch e print(\"set\") end\n"
@@ -83,7 +83,7 @@ int main() {
           "try vec_remove(v, 1) catch e print(\"remove\") end\n"
           "vec_pop(v)\n"
           "try vec_pop(v) catch e print(\"pop\") end\n"
-          "try vec_len([1]) catch e print(\"type\") end\n"
+          "try vec_len(lh([1])) catch e print(\"type\") end\n"
           "try vec_len(table()) catch e print(\"tag\") end\n",
           "get\nneg\nset\ninsert\nremove\npop\ntype\ntag\n" },
 
@@ -113,7 +113,7 @@ int main() {
           "[1, 2, 3]\n" },
 
         { "a pointer that is not a vec still gets a clean error from array functions",
-          "t = table()\n"
+          "fn lh(v) return v end t = lh(table())\n"
           "try sort(t) catch e print(\"sort\") end\n"
           "try push(t, 1) catch e print(\"push\") end\n"
           "try join(t, \",\") catch e print(\"join\") end\n",
@@ -143,11 +143,22 @@ int main() {
           "7 [7]\n" },
 
         { "embrlib: other array functions do not take a vec, vec_to_array says what you mean",
-          "v = vec_from([3, 1, 2])\n"
-          "try sort(v) catch e print(\"sort\") end\n"
-          "try join(v, \",\") catch e print(\"join\") end\n"
+          "fn lh(v) return v end v = vec_from([3, 1, 2])\n"
+          "w = lh(v)\n"
+          "try sort(w) catch e print(\"sort\") end\n"
+          "try join(w, \",\") catch e print(\"join\") end\n"
           "print(sort(vec_to_array(v)), sum(vec_to_array(v)))\n",
           "sort\njoin\n[1, 2, 3] 6\n" },
+
+        { "indexing: v[i], v[i] = x and for x in v read like an array",
+          "v = vec_from([10, 20, 30])\nprint(v[1])\nv[1] = 99\nprint(v[1])\nv[0] = v[0] + 1\nfor x in v\n  print(x)\nend\n"
+          "fn bump(p)\n  p[2] = p[2] * 2\n  return p[2]\nend\nprint(bump(v))\nprint(len(v))\n",
+          "20\n99\n11\n99\n30\n60\n3\n" },
+
+        { "indexing: an index out of range or not a number is an error you can catch",
+          "v = vec_from([1])\ntry\n  print(v[5])\ncatch e\n  print(\"out of range\")\nend\n"
+          "try\n  v[\"a\"] = 1\ncatch e\n  print(\"not a number\")\nend\n",
+          "out of range\nnot a number\n" },
 
         { "vec_each_do: gets the element and its index, in order",
           "v = vec_from([\"a\", \"b\", \"c\"])\n"
@@ -180,10 +191,10 @@ int main() {
           "[10, 21, 32]\n0\n" },
 
         { "vec_each_do / vec_map_do: an error in fn propagates and leaves the vec usable",
-          "v = vec_from([1, 2])\n"
+          "fn lh(v) return v end v = vec_from([1, 2])\n"
           "try vec_each_do(v, fn(x, i) error(\"boom\") end) catch e print(\"caught\") end\n"
           "vec_push(v, 3)\nprint(vec_len(v))\n"
-          "try vec_each_do(5, fn(x, i) return 0 end) catch e print(\"type\") end\n",
+          "try vec_each_do(lh(5), fn(x, i) return 0 end) catch e print(\"type\") end\n",
           "caught\n3\ntype\n" },
 
         { "vec: a big vec builds in linear time",

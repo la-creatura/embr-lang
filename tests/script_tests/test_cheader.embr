@@ -1,0 +1,224 @@
+# tests for modules/cheader.embr (the C header reader) and the ffi_bind / ffi_ctype helpers in ffi.embr
+import "testing.embr"
+import "cheader.embr"
+import "ffi.embr"
+import "embrtypes"
+import "embrlib"
+import "str"
+
+HEADER = "
+#ifndef DEMO_H
+#define DEMO_H
+#define API
+#define VERSION \"1.2\"
+#define PI 3.14159265358979323846f
+#define FLAG_A 0x00000040
+#define FLAG_B (1 << 5)
+#define BOTH (FLAG_A | FLAG_B)
+#define MASK (~0x0F & 0xFF)
+#define LEVELS 3
+#if defined(USE_EXTRA) || (LEVELS > 5)
+#define EXTRA 1
+#elif LEVELS == 3
+#define EXTRA 2
+#else
+#define EXTRA 3
+#endif
+#define RED CLITERAL(Color){ 200, 0, 0, 255 }
+#define CLITERAL(type) (type)
+#define SQUARE(x) ((x)*(x))
+typedef struct Vec2 { float x; float y; } Vec2;
+typedef struct Color {
+    unsigned char r, g, b, a; // channels
+} Color;
+typedef struct Thing { int n; float *verts; unsigned short idx[3]; Vec2 pos, vel; } Thing;
+typedef enum { KEY_NULL = 0, KEY_A = 65, KEY_B, KEY_C = KEY_A + 10 } Key;
+enum { ANON_X = 1 << 4, ANON_Y };
+typedef struct Opaque Opaque;
+typedef void (*Callback)(int level, const char *text);
+typedef unsigned int uint;
+API void InitDemo(int width, int height, const char *title);
+API Color Fade(Color color, float alpha);
+API const char *Format(const char *text, ...);
+API void SetCb(Callback cb, void (*other)(int), float vals[4], unsigned int);
+API int Poll(void);
+#define Init InitDemo
+static inline int Twice(int x) { return x * 2; }
+extern int some_var;
+#endif
+"
+
+fn test_numbers_and_expressions()
+    assert_eq(cheader_eval("64 | 32"), 96)
+    assert_eq(cheader_eval("5 & 3"), 1)
+    assert_eq(cheader_eval("5 ^ 3"), 6)
+    assert_eq(cheader_eval("-1 & 255"), 255)
+    assert_eq(cheader_eval("~0"), -1)
+    assert_eq(cheader_eval("1 << 5"), 32)
+    assert_eq(cheader_eval("256 >> 4"), 16)
+    assert_eq(cheader_eval("0xFF & ~0x0F"), 240)
+    assert_eq(cheader_eval("7 / 2"), 3)
+    assert_eq(cheader_eval("-7 / 2"), -3)
+    assert_eq(cheader_eval("7.0 / 2"), 3.5)
+    assert_eq(cheader_eval("(int)3.9"), 3)
+    assert_eq(cheader_eval("1 ? 2 : 3"), 2)
+    assert_eq(cheader_eval("2 + 3 * 4"), 14)
+    assert_eq(cheader_eval("'a'"), 97)
+    assert_eq(cheader_eval("010"), 8)
+    assert_eq(cheader_eval("0b101"), 5)
+    assert_eq(cheader_eval("0x7FFFFFFFu"), 2147483647)
+    assert_eq(type(cheader_eval("1.5f")), "number")
+    assert_eq(cheader_eval("\"a\" \"b\""), "ab")
+end
+
+fn test_expression_errors()
+    e = assert_raises(fn() return cheader_eval("1 / 0") end)
+    assert_true(str_contains_text(e["message"], "division by zero"))
+    e2 = assert_raises(fn() return cheader_eval("nope + 1") end)
+    assert_true(str_contains_text(e2["message"], "unknown name"))
+    assert_raises(fn() return cheader_eval("(1 + 2") end)
+    assert_raises(fn() return cheader_eval("1 +") end)
+end
+
+fn str_contains_text(s, part)
+    return str_find(s, part) >= 0
+end
+
+fn test_constants()
+    h = cheader_parse(HEADER)
+    c = h["constants"]
+    assert_eq(c["VERSION"], "1.2")
+    assert_eq(c["FLAG_A"], 64)
+    assert_eq(c["FLAG_B"], 32)
+    assert_eq(c["BOTH"], 96)
+    assert_eq(c["MASK"], 240)
+    assert_eq(c["EXTRA"], 2)
+    assert_eq(c["RED"], {r: 200, g: 0, b: 0, a: 255})
+    assert_true(c["PI"] > 3.14159 and c["PI"] < 3.1416)
+    assert_false(has(c, "DEMO_H"))
+    assert_false(has(c, "SQUARE"))
+    assert_true(index_of(h["function_macros"], "CLITERAL") >= 0)
+    assert_true(index_of(h["function_macros"], "SQUARE") >= 0)
+end
+
+fn test_defines_option_and_conditionals()
+    h = cheader_parse(HEADER, {defines: {USE_EXTRA: 1}})
+    assert_eq(h["constants"]["EXTRA"], 1)
+end
+
+fn test_enums()
+    h = cheader_parse(HEADER)
+    assert_eq(h["enums"]["Key"], {KEY_NULL: 0, KEY_A: 65, KEY_B: 66, KEY_C: 75})
+    assert_eq(h["constants"]["KEY_C"], 75)
+    assert_eq(h["constants"]["ANON_X"], 16)
+    assert_eq(h["constants"]["ANON_Y"], 17)
+end
+
+fn test_structs_and_types()
+    h = cheader_parse(HEADER)
+    assert_eq(h["structs"]["Vec2"], [["x", "float"], ["y", "float"]])
+    assert_eq(len(h["structs"]["Color"]), 4)
+    assert_eq(h["structs"]["Color"][3], ["a", "unsigned char"])
+    thing = h["structs"]["Thing"]
+    assert_eq(thing[1], ["verts", "float *"])
+    assert_eq(thing[2], ["idx_0", "unsigned short"])
+    assert_eq(thing[5], ["pos", "Vec2"])
+    assert_eq(thing[6], ["vel", "Vec2"])
+    kinds = {}
+    for t in h["types"]
+        kinds[t["name"]] = t["kind"]
+    end
+    assert_eq(kinds["Vec2"], "struct")
+    assert_eq(kinds["Key"], "enum")
+    assert_eq(kinds["Opaque"], "opaque")
+    assert_eq(kinds["Callback"], "funcptr")
+    assert_eq(kinds["uint"], "alias")
+end
+
+fn test_functions()
+    h = cheader_parse(HEADER)
+    f = h["functions"]
+    assert_eq(f["InitDemo"], {ret: "void", params: ["int", "int", "const char *"], variadic: 0})
+    assert_eq(f["Fade"]["ret"], "Color")
+    assert_eq(f["Format"]["variadic"], 1)
+    assert_eq(f["Format"]["ret"], "const char *")
+    assert_eq(f["SetCb"]["params"], ["Callback", "void *", "float *", "unsigned int"])
+    assert_eq(f["Poll"]["params"], [])
+    assert_false(has(f, "Twice"))
+    assert_eq(h["aliases"], {Init: "InitDemo"})
+    assert_eq(h["problems"], [])
+end
+
+fn test_comments_and_strings()
+    h = cheader_parse("#define URL \"http://example.com\" // a comment\n/* block\n comment */ #define TWO 2\n")
+    assert_eq(h["constants"]["URL"], "http://example.com")
+    assert_eq(h["constants"]["TWO"], 2)
+end
+
+fn test_include_option()
+    # cheader_inc.h sits next to this file: typedef int Handle; #define INC_VALUE 7
+    h = cheader_parse("#include \"cheader_inc.h\"\n#include <stdint.h>\nHandle Open(void);\n", {include: {"cheader_inc.h": "cheader_inc.h"}})
+    assert_eq(h["constants"]["INC_VALUE"], 7)
+    assert_eq(h["functions"]["Open"]["ret"], "Handle")
+end
+
+fn test_unreadable_things_are_reported_not_fatal()
+    h = cheader_parse("#define BAD (1 +\n#define OK 1\nint broken(;\nint fine(int a);\n")
+    assert_eq(h["constants"]["OK"], 1)
+    assert_true(has(h["functions"], "fine"))
+end
+
+# the C library under another name per platform. gives [lib], or [] when none opens (the test is then skipped)
+fn find_libc()
+    for name in ["libc.so.6", "msvcrt.dll", "/usr/lib/libSystem.B.dylib"]
+        try
+            return [ffi_open(name)]
+        catch e
+            continue
+        end
+    end
+    return []
+end
+
+fn test_ffi_bind_calls_a_real_library()
+    found = find_libc()
+    if len(found) == 0
+        return 0
+    end
+    lib = found[0]
+    h = cheader_parse("
+        typedef struct DivResult { int quot; int rem; } DivResult;
+        DivResult div(int numer, int denom);
+        unsigned long strlen(const char *s);
+        int abs(int x);
+        int surely_not_in_libc(int x);
+        const char *getenv(const char *name);
+    ")
+    r = ffi_bind(lib, h)
+    assert_eq(r["bound"], 4)
+    assert_eq(r["missing"], ["surely_not_in_libc"])
+    assert_eq(r["failed"], {})
+    assert_eq(strlen("hello"), 5)
+    assert_eq(abs(-7), 7)
+    assert_eq(div(17, 5), {quot: 3, rem: 2})
+end
+
+fn test_ffi_bind_only_and_aliases()
+    found = find_libc()
+    if len(found) == 0
+        return 0
+    end
+    lib = found[0]
+    h = cheader_parse("int abs(int x);\nlong labs(long x);\n#define absolute abs\n")
+    r = ffi_bind(lib, h, {only: ["labs"], aliases: 1})
+    assert_eq(r["bound"], 1)
+    assert_eq(labs(-9), 9)
+end
+
+fn test_ffi_ctype()
+    assert_eq(type_name(ffi_ctype("unsigned int")), type_name(type_u32()))
+    assert_eq(type_name(ffi_ctype("const char *")), type_name(type_str()))
+    assert_eq(type_name(ffi_ctype("void *")), type_name(type_ptr()))
+    e = assert_raises(fn() return ffi_ctype("NotAType") end)
+    assert_true(str_contains_text(e["message"], "unknown C type"))
+end

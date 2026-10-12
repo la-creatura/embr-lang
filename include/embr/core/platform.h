@@ -34,16 +34,19 @@ namespace embr {
    using PluginHandle = HMODULE;
    inline PluginHandle pluginOpen (const char *p)                { return LoadLibraryA(p); }
    inline void        *pluginSym  (PluginHandle h, const char *s){ return (void*)GetProcAddress(h, s); }
-   inline void         pluginClose(PluginHandle h)               { FreeLibrary(h); }
+   // a plugin is never unloaded, see the unix version
+   inline void         pluginClose(PluginHandle)                 {}
    inline std::string  pluginError()                             { return "LoadLibrary error " + std::to_string(GetLastError()); }
    static constexpr const char *PLUGIN_EXT = ".dll";
 #elif defined(__linux__) || defined(__APPLE__) || defined(__unix__)
    using PluginHandle = void*;
    inline PluginHandle pluginOpen (const char *p)                { return dlopen(p, RTLD_NOW | RTLD_LOCAL); }
    inline void        *pluginSym  (PluginHandle h, const char *s){ return dlsym(h, s); }
-   // EMBR_NO_DLCLOSE=1 keeps plugins mapped for the whole process: leak checkers (LeakSanitizer, valgrind)
-   // can then symbolise allocations made inside a plugin instead of reporting "<unknown module>"
-   inline void         pluginClose(PluginHandle h)               { if (!std::getenv("EMBR_NO_DLCLOSE")) dlclose(h); }
+   // a plugin stays mapped for the whole process. unloading it is not safe once there is more than one interpreter: the
+   // tags a plugin interns live in its memory (and a function-local static in a header is shared by name between the
+   // libraries), so loading the same plugin a second time would find them freed. it also lets leak checkers name the
+   // plugin that made an allocation
+   inline void         pluginClose(PluginHandle)                 {}
    inline std::string  pluginError()                             { const char *e = dlerror(); return e ? e : "unknown error"; }
 #  if defined(__APPLE__)
    static constexpr const char *PLUGIN_EXT = ".dylib";

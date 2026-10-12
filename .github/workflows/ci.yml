@@ -2,7 +2,7 @@
 # directory, so two presets must never build in the same checkout.
 #
 # every job builds with -Werror, the bar is a zero-warning build. the tests are the per-plugin CTest targets
-# (tests/CMakeLists.txt). on a dual-backend build each suite is registered twice (<name>_tw / <name>_vm).
+# (tests/CMakeLists.txt). each suite is registered once per backend (<name>_<backend>, today only <name>_vm).
 # every checkout pulls the wiki submodule (wiki/), so the docs checks (docs_examples, editor_grammar) run here too.
 
 name: ci
@@ -16,8 +16,8 @@ env:
   CTEST_TIMEOUT: 120
 
 jobs:
-  linux-vm-debug:
-    name: linux-vm-debug (both backends)
+  linux-debug:
+    name: linux-debug
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,14 +26,14 @@ jobs:
       - name: install dependencies
         run: sudo apt-get update && sudo apt-get install -y libffi-dev libssl-dev
       - name: configure
-        run: cmake --preset linux-vm-debug -DCMAKE_CXX_FLAGS=-Werror
+        run: cmake --preset linux-debug -DCMAKE_CXX_FLAGS=-Werror
       - name: build
-        run: cmake --build build/linux-vm-debug -j"$(nproc)"
+        run: cmake --build build/linux-debug -j"$(nproc)"
       - name: test
-        run: ctest --test-dir build/linux-vm-debug -j"$(nproc)" --output-on-failure --timeout "$CTEST_TIMEOUT"
+        run: ctest --test-dir build/linux-debug -j"$(nproc)" --output-on-failure --timeout "$CTEST_TIMEOUT"
 
   linux-release:
-    name: linux-release (tree-walker)
+    name: linux-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,11 +48,11 @@ jobs:
       - name: test
         run: ctest --test-dir build/linux-release -j"$(nproc)" --output-on-failure --timeout "$CTEST_TIMEOUT"
 
-  # both backends again, Debug, under AddressSanitizer + UndefinedBehaviorSanitizer.
+  # Debug again, under AddressSanitizer + UndefinedBehaviorSanitizer.
   # configured straight into a scratch dir instead of a preset, so it doesn't
   # need a checked-in preset that writes to the shared bin/ directory.
   sanitizers:
-    name: asan + ubsan (both backends)
+    name: asan + ubsan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,7 +65,6 @@ jobs:
           cmake -S . -B build/sanitize
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_TOOLCHAIN_FILE=cmake/linux-gcc.cmake
-          -DEMBR_WITH_TREE_WALKER=ON -DEMBR_WITH_VM=ON
           -DCMAKE_CXX_FLAGS="-Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
           -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address,undefined"
@@ -83,7 +82,7 @@ jobs:
   # `SEED=<run number> tools/fuzz/run.sh <target>`; the saved inputs are uploaded when it fails.
   # the fuzzers build in a scratch dir (tools/fuzz/run.sh), so they never touch bin/linux/.
   fuzz-smoke:
-    name: fuzz smoke (frontend, fmt, json, plugins)
+    name: fuzz smoke (frontend, fmt, vmbr, json, plugins)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,14 +92,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libffi-dev libssl-dev
       - name: configure and build (only the generated header is needed, but the build makes it)
         run: |
-          cmake --preset linux-vm-debug
-          cmake --build build/linux-vm-debug -j"$(nproc)"
+          cmake --preset linux-debug
+          cmake --build build/linux-debug -j"$(nproc)"
       - name: fuzz
         env:
           OUT: ${{ runner.temp }}/embr-fuzz
           SEED: ${{ github.run_number }}
           N: 400
-        run: tools/fuzz/run.sh frontend fmt json plugins
+        run: tools/fuzz/run.sh frontend fmt vmbr json plugins
       - name: upload findings
         if: failure()
         uses: actions/upload-artifact@v4
@@ -109,24 +108,95 @@ jobs:
           path: ${{ runner.temp }}/embr-fuzz/*.*
           if-no-files-found: ignore
 
-  # the VM must not get slower relative to the tree-walker. a ratio, not a time, so a noisy runner doesn't flake it:
-  # tools/bench/check.sh compares vm/tree-walker per benchmark with tools/bench/baseline.txt (35% tolerance,
-  # best of 5) and writes the table to the job summary. needs a Release build with both backends.
+  # embr must not get slower. a ratio between two builds on the same runner, so a noisy runner doesn't flake it:
+  # the base commit (the pull request's base, or the commit before a push) is built in a second checkout, and
+  # tools/bench/check.sh fails when a benchmark takes more than 35% longer on this commit (best of 5). the table
+  # goes to the job summary. both builds are Release. the base lives in its own worktree because bin/linux/ is shared.
   bench-guard:
-    name: bench guard (vm vs tree-walker ratio)
+    name: bench guard (this commit vs the base commit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+      - name: install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libffi-dev libssl-dev bc
+      - name: find the base commit
+        id: base
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=""; fi
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+      - name: build this commit
+        run: |
+          cmake --preset linux-release
+          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin -j"$(nproc)"
+      - name: build the base commit
+        if: steps.base.outputs.sha != ''
+        run: |
+          git worktree add ../embr-base "${{ steps.base.outputs.sha }}"
+          cd ../embr-base
+          cmake --preset linux-release
+          cmake --build build/linux-release --target embr embrlib_plugin embrmath_plugin vec_plugin -j"$(nproc)"
+      - name: check times
+        env:
+          BASE: ${{ steps.base.outputs.sha != '' && '../embr-base/bin/linux/embr' || '' }}
+        run: tools/bench/check.sh
+
+  # which lines the tests reach. builds a copy of the tree with --coverage (tools/coverage/run.sh), uploads the html
+  # report (download the artifact, open index.html) and puts the per-file summary, worst first, on the job page.
+  # it is for finding untested code, not a percentage to hit, so it never fails on a low number
+  coverage:
+    name: coverage report
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
       - name: install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libffi-dev libssl-dev bc
-      - name: configure and build
+        run: sudo apt-get update && sudo apt-get install -y libffi-dev libssl-dev
+      - name: build, test and report
+        env:
+          OUT: ${{ runner.temp }}/embr-coverage
+        run: JOBS="$(nproc)" tools/coverage/run.sh
+      - name: summary
+        if: always()
         run: |
-          cmake --preset linux-vm-release
-          cmake --build build/linux-vm-release --target embr embrlib_plugin vec_plugin -j"$(nproc)"
-      - name: check ratios
-        run: tools/bench/check.sh
+          f="${{ runner.temp }}/embr-coverage/report/summary.txt"
+          if [[ -f "$f" ]]; then { echo '```'; head -40 "$f"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/embr-coverage/report
+          if-no-files-found: ignore
+
+  # the windows build, the same way the windows-release preset makes it: cross-compiled with MinGW on linux. the tests
+  # run under wine (CMAKE_CROSSCOMPILING_EMULATOR), so this checks the windows code paths and the .exe and .dll files,
+  # not a real windows machine. the bash smoke tests are not registered on windows (tests/CMakeLists.txt).
+  # continue-on-error until it has been green here once, then delete that line
+  windows:
+    name: windows (mingw cross build, tests under wine)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: install dependencies
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64 wine
+      - name: configure
+        run: cmake --preset windows-release -DCMAKE_CXX_FLAGS=-Werror -DCMAKE_CROSSCOMPILING_EMULATOR=wine
+      - name: build
+        run: cmake --build build/windows-release -j"$(nproc)"
+      - name: test
+        env:
+          WINEDEBUG: -all
+        run: |
+          wineboot --init   # make the wine prefix once, before the tests start in parallel
+          ctest --test-dir build/windows-release -j"$(nproc)" --output-on-failure --timeout "$CTEST_TIMEOUT"
 
   # macos has not been built by the maintainer yet (no mac available). this job exists so the first real run
   # shows what is left to fix. continue-on-error keeps it from blocking merges until it has been green once,
@@ -143,9 +213,9 @@ jobs:
       - name: install dependencies
         run: brew install libffi pkg-config openssl@3
       - name: configure
-        run: cmake --preset macos-vm-debug -DCMAKE_CXX_FLAGS=-Werror
+        run: cmake --preset macos-debug -DCMAKE_CXX_FLAGS=-Werror
       - name: build
         # -k keeps going after an error, so one run lists every compile problem instead of the first few
-        run: cmake --build build/macos-vm-debug -j"$(sysctl -n hw.ncpu)" -- -k
+        run: cmake --build build/macos-debug -j"$(sysctl -n hw.ncpu)" -- -k
       - name: test
-        run: ctest --test-dir build/macos-vm-debug -j"$(sysctl -n hw.ncpu)" --output-on-failure --timeout "$CTEST_TIMEOUT"
+        run: ctest --test-dir build/macos-debug -j"$(sysctl -n hw.ncpu)" --output-on-failure --timeout "$CTEST_TIMEOUT"

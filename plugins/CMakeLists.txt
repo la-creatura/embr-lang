@@ -1,5 +1,22 @@
 set(PLUGIN_DIR "${BIN_DIR}/plugins")
 
+# a plugin written in C against include/embr_plugin.h: links nothing from embr, so it needs no generated header and no precompiled copy
+enable_language(C)
+function(add_c_plugin name source)
+    set(target "${name}_plugin")
+    add_library(${target} SHARED "${name}/${source}")
+    target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    set_target_properties(${target} PROPERTIES
+        OUTPUT_NAME "${name}"
+        PREFIX ""
+        C_STANDARD 99
+        C_VISIBILITY_PRESET hidden
+        LIBRARY_OUTPUT_DIRECTORY "${PLUGIN_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY "${PLUGIN_DIR}"
+    )
+    install(TARGETS ${target} LIBRARY DESTINATION lib/embr/plugins RUNTIME DESTINATION lib/embr/plugins)
+endfunction()
+
 function(add_plugin name source)
 
     # cmake target names must be unique across the whole build
@@ -9,6 +26,7 @@ function(add_plugin name source)
 
     # plugins consume the generated single header, so they rebuild automatically whenever a modular header changes
     target_link_libraries(${target} PRIVATE embr_single_header)
+    embr_use_pch(${target} pic)
 
     # macOS refuses to link a shared library with unresolved symbols unless told they will be provided at load time
     if(APPLE)
@@ -27,19 +45,21 @@ endfunction()
 add_plugin(embrlib embrlib.cpp)
 add_plugin(str str.cpp)
 add_plugin(unicode unicode.cpp)
-add_plugin(json json.cpp)
+add_c_plugin(json json.c)             # written in C against include/embr_plugin.h
 add_plugin(embrtypes embrtypes.cpp)
 add_plugin(ffi ffi.cpp)
 add_plugin(embrmath embrmath.cpp)
-add_plugin(fs fs.cpp)
-add_plugin(path path.cpp)
+add_c_plugin(fs fs.c)                   # written in C against include/embr_plugin.h
+add_c_plugin(path path.c)               # written in C against include/embr_plugin.h
 add_plugin(os os.cpp)
 add_plugin(random random.cpp)
-add_plugin(encoding encoding.cpp)
-add_plugin(csv csv.cpp)
+add_c_plugin(encoding encoding.c)       # written in C against include/embr_plugin.h, see the wiki, writing-plugins
+add_c_plugin(csv csv.c)               # written in C against include/embr_plugin.h
 add_plugin(time time.cpp)
 add_plugin(regex regex.cpp)
 add_plugin(embrmeta embrmeta.cpp)
+add_plugin(package package.cpp)
+add_plugin(pmbr pmbr.cpp)
 add_plugin(table table.cpp)
 add_plugin(vec vec.cpp)
 add_plugin(parallel parallel.cpp)

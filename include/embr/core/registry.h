@@ -6,29 +6,40 @@
 #include "diagnostics.h"
 #include "types.h"
 #include "value.h"
+#include "typed.h"
 #include "ast.h"
 #include "platform.h"
 
+#include <chrono>
 #include <atomic>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <deque>
+#include <map>
 #include <set>
 #include <unordered_map>
 #include <memory>
+#include <unordered_set>
 #include <iostream>
+
+#include "plugininfo.h"
 
 namespace embr {
 
 // which native plugins a script may `import`, and whether embrlib may touch files
 // the default is unrestricted. a restricted policy (--sandbox, --allow-plugins, --no-plugins, or an embedder's own)
-// is enforced in one place, importNativePlugin() in module.h, which both backends call. it is also copied into the
+// is enforced in one place, importNativePlugin() in module.h, which every backend calls. it is also copied into the
 // worker Interpreters that parallel/async create, so a script can't escape by spawning a worker
 // this is an import allow-list, not a full sandbox: nothing limits cpu, memory or time, and an allowed plugin can do anything it can do
 struct PluginPolicy {
     bool                     restricted = false;   // false: everything allowed
     std::set<std::string>    allowed;              // plugin names (bare, no extension) when restricted
     bool                     fileIo = true;        // embrlib's load_file / write_file / append_file
+    uint64_t                 deniedCaps = 0;       // EMBR_CAP_* bits a plugin may not ask for (cplugin.h). fileIo off also denies the filesystem one
+    bool                     anyName = false;      // restricted, but every bare name may be imported: the capabilities decide, not the name
+    bool                     requireSigned = false; // a package must be signed by a trusted key (core/package.h); an unsigned one is refused
+    std::set<std::string>    trustedKeys;          // public keys (hex) trusted besides the user's trust list and the project's, set by an embedder
 
     // "" if importing `rawPath` is permitted, else a message saying why not
     std::string check(const std::string& rawPath) const {
@@ -39,7 +50,7 @@ struct PluginPolicy {
         if (rawPath.empty() || rawPath.find_first_of("/\\") != std::string::npos ||
             rawPath.find('.') != std::string::npos)
             return "plugin imports must be bare names (no path, no extension) in a restricted sandbox: \"" + rawPath + "\"";
-        if (!allowed.count(rawPath)) {
+        if (!anyName && !allowed.count(rawPath)) {
             std::string list;
             for (const auto& n : allowed) list += (list.empty() ? "" : ", ") + n;
             return "plugin \"" + rawPath + "\" is not allowed in this sandbox (allowed: " +
@@ -49,9 +60,44 @@ struct PluginPolicy {
     }
 };
 
+// `abs__2` is the second member of the overload group `abs`: a name that ends in two underscores and a number with no leading zero.
+// the author picks the numbers and a number is part of the public name, so adding `abs__3` never changes a call of `abs__2`.
+// a bare `abs(x)` is resolved to one of the members from the argument types (see core/typecheck.h) or, when they are not known
+// before the script runs, when it is called (VmRunner, vm.h). `base` and `num` are filled in when it is one.
+inline bool overloadName(const std::string& name, std::string* base = nullptr, int* num = nullptr) {
+    const size_t at = name.rfind("__");
+    if (at == std::string::npos || at == 0 || at + 2 >= name.size()) return false;
+    if (name[at - 1] == '_') return false;                       // `a___1`: not clear where the group name ends
+    const char first = name[at + 2];
+    if (first < '1' || first > '9') return false;
+    long n = 0;
+    for (size_t i = at + 2; i < name.size(); ++i) {
+        if (name[i] < '0' || name[i] > '9') return false;
+        n = n * 10 + (name[i] - '0');
+        if (n > 1000000) return false;
+    }
+    if (base) *base = name.substr(0, at);
+    if (num) *num = (int)n;
+    return true;
+}
+
+class Interpreter;
+// puts the hooks below on an interpreter. defined in core/invoke.h, called when a runner is made (see the hooks)
+inline void installBackend(Interpreter& interp);
+
 class Interpreter {
 public:
     using NativeFn = Value::NativeFn;
+
+    // how a plugin calls back into script code without compiling the backend into itself: embr::invoke(), loadEmbrModule() and
+    // runSource() (core/invoke.h) call these. a VmRunner puts them on its interpreter when it is made, so by the time a plugin runs
+    // they are set. an interpreter a plugin makes itself (a worker thread) copies its parent's
+    struct BackendHooks {
+        Value (*invoke)(Interpreter&, const Value& callee, const std::vector<Value>& args, const SourceRange& site) = nullptr;
+        Value (*loadModule)(Interpreter&, const std::string& rawPath, const SourceRange& site, bool mutateCallerScope, bool forceReload) = nullptr;
+        void  (*runSource)(const std::string& src, Interpreter&, const std::string& filename) = nullptr;
+    };
+    BackendHooks backend;
 
     Interpreter() {
         auto s0 = std::make_shared<Scope>();
@@ -81,11 +127,14 @@ public:
         // frees their contents, and lets plugin-owned values (tables, handles) die while their plugin is still loaded
         scopesChanged();
         for (auto& sc : gcAllLiveScopes()) sc->clear();
+        for (auto& c : gcAllLiveCells()) { c->v = Value(); c->defined = false; }
         // empty every plugin container that is still alive (a table holding itself is a cycle no scope owns)
         for (auto& c : clearables_) if (auto owner = c.owner.lock()) { (void)owner; c.clear(); }
         clearables_.clear();
         for (auto& hook : teardownHooks_) hook();
         teardownHooks_.clear();        // hooks are std::functions whose code may live in a plugin: drop before dlclose
+        for (Value* r : cRoots) delete r;   // a rooted value can hold a handle whose finalizer is plugin code
+        cRoots.clear();
         // remove anything holding plugin function pointers
         scopes_.clear();
         // GC root providers are std::functions whose code lives in the plugin that registered them;
@@ -117,8 +166,8 @@ public:
 
     // assign into nearest scope that already holds the name
     // checking it against that scope's recorded type constraint if there is one
-    // falling back to the current module floor (not necessarily scopes_[0]) for a name never declared
-    void set(const std::string& k, Value v) {
+    // falling back to the current module's top scope (not necessarily scopes_[0]) for a name never declared
+    void set(const std::string& k, Value v, TypeSet createType = TypeSet::Any()) {
         for (size_t idx = scopes_.size(); idx-- > 0; ) {
             auto it = scopes_[idx]->find(k);
             if (it == scopes_[idx]->end()) continue;
@@ -131,19 +180,17 @@ public:
             it->second = std::move(v);
             return;
         }
+        // a new name: its type is the type of this first value (or `createType`, when the compiler worked out
+        // a wider one), and every later assignment is checked against it
         scopesChanged();
-        (*scopes_[assignFloor()])[k] = std::move(v);
+        TypeSet ts = createType.isAny() ? TypeSet(v.tag()) : createType;
+        varTypes_[moduleBase_][k] = ts;
+        (*scopes_[moduleBase_])[k] = std::move(v);
     }
 
-    // the scope where assigning to a brand-new name creates it: the running function's scope (so a name first
-    // assigned in a fn is local to that call), or the module floor when no function is running (top-level code,
-    // including inside its if/while blocks, makes module-level globals). the VM does the same (VmRunner::resolveStore)
-    // to set a global from inside a function, use the embrmeta plugin
-    size_t assignFloor() const { return funcFloor_ > moduleBase_ ? funcFloor_ : moduleBase_; }
-    size_t topScopeIndex() const { return scopes_.size() - 1; }
-    // a function call points the floor at its own (innermost) scope; returns the previous floor so
-    // the caller can restore it when the call ends
-    size_t swapFuncFloor(size_t idx) { size_t old = funcFloor_; funcFloor_ = idx; return old; }
+    // a name assigned for the first time at top level becomes a module global. inside a function the VM makes
+    // it local to that call instead (VmRunner::resolveStore). to set a global from inside a function, use the
+    // embrmeta plugin
 
     // ideally should be wrapped in has() where used to throw a more meaningful error
     Value get(const std::string& name) const {
@@ -174,7 +221,7 @@ public:
 
     // like findMut(), and also says whether the scope holding the name has a type constraint on it
     // (then assigning has to go through set(), which checks it)
-    Value* findForCache(const std::string& name, bool& typed) {
+    Value* findForCache(const std::string& name, bool& typed, TypeSet* type = nullptr) {
         for (size_t idx = scopes_.size(); idx-- > 0; ) {
             auto it = scopes_[idx]->find(name);
             if (it == scopes_[idx]->end()) continue;
@@ -182,8 +229,26 @@ public:
             if (!varTypes_[idx].empty()) {
                 auto ty = varTypes_[idx].find(name);
                 typed = ty != varTypes_[idx].end() && !ty->second.isAny();
+                if (typed && type) *type = ty->second;
             }
             return &it->second;
+        }
+        return nullptr;
+    }
+
+    // the type recorded for the innermost variable of this name (declared, or taken from its first value), or null if
+    // it has none. the static type checker reads it so a name made by an earlier file or REPL line is known
+    // what an earlier file or REPL line found the elements of an array or map global to be (`xs = [1, 2]` is arr<int>), kept by the static checker
+    const TypeElem* staticElem(const std::string& name) const {
+        auto it = staticElems_.find(name);
+        return it == staticElems_.end() ? nullptr : &it->second;
+    }
+    void setStaticElem(const std::string& name, TypeElem el) { if (el) staticElems_[name] = std::move(el); else staticElems_.erase(name); }
+    const TypeSet* recordedType(const std::string& name) const {
+        for (size_t idx = scopes_.size(); idx-- > 0; ) {
+            if (!scopes_[idx]->count(name)) continue;
+            auto it = varTypes_[idx].find(name);
+            return it == varTypes_[idx].end() || it->second.isAny() ? nullptr : &it->second;
         }
         return nullptr;
     }
@@ -206,14 +271,193 @@ public:
         else              varTypes_.back().erase(k);
     }
 
+    // resolveDunder()'s cache, one entry per (tag, op). mutable: a lookup is a const operation
+    struct DunderCacheEntry { std::string op; std::string name; };
+    DunderCacheEntry& dunderEntry(const void* tagId, const std::string& op) const {
+        auto& list = dunderCache_[tagId];
+        for (auto& e : list) if (e.op == op) return e;
+        list.emplace_back(); list.back().op = op;
+        return list.back();
+    }
+
+    // the members of the overload group `base` that are visible now (every scope), by number: {number, name}
+    std::vector<std::pair<int, std::string>> overloadGroup(const std::string& base) const {
+        std::vector<std::pair<int, std::string>> out;
+        std::unordered_set<std::string> seen;
+        for (size_t i = scopes_.size(); i-- > 0; )
+            for (const auto& kv : *scopes_[i]) {
+                std::string b; int n = 0;
+                if (!overloadName(kv.first, &b, &n) || b != base || !seen.insert(kv.first).second) continue;
+                if (kv.second.isCallable()) out.emplace_back(n, kv.first);
+            }
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+    // the same, kept until a name is added or a scope comes or goes (scopeEpoch), for the dispatcher that runs on every call
+    const std::vector<std::pair<int, std::string>>& overloadGroupCached(const std::string& base) const {
+        auto& e = overloadCache_[base];
+        if (e.first != scopeEpoch_ || e.first == 0) { e.second = overloadGroup(base); e.first = scopeEpoch_; }
+        return e.second;
+    }
+    // every name that has at least one member visible now
+    std::vector<std::string> overloadBases() const {
+        std::set<std::string> bases;
+        for (const auto& sp : scopes_)
+            for (const auto& kv : *sp) {
+                std::string b;
+                if (overloadName(kv.first, &b) && kv.second.isCallable()) bases.insert(b);
+            }
+        return std::vector<std::string>(bases.begin(), bases.end());
+    }
+    // the number the next member of the group `base` gets: one above every number the group has had, so a number is never reused even
+    // after a member was removed. claimOverload() records it
+    int nextOverload(const std::string& base) const {
+        int top = 0;
+        auto hw = overloadHighWater_.find(base);
+        if (hw != overloadHighWater_.end()) top = hw->second;
+        for (const auto& m : overloadGroup(base)) top = std::max(top, m.first);
+        return top + 1;
+    }
+    void claimOverload(const std::string& base, int num) { int& hw = overloadHighWater_[base]; hw = std::max(hw, num); }
+    // makes the bare name `base` the runtime dispatcher of its group. the VM sets the function that does it when the first script is
+    // compiled, so a plugin can ask without knowing about the VM
+    std::function<void(const std::string&)> overloadInstaller;
+    void installOverload(const std::string& base) {
+        if (!overloadInstaller) raiseError("overload", "no script has been compiled in this interpreter, so there is no dispatcher to install");
+        overloadInstaller(base);
+    }
+    // a plugin that was loaded after the last compile (an import inside a module, which is compiled before its own imports run) may
+    // have brought a group no script was compiled against: give its bare name a dispatcher now, as compileSource does
+    void installPendingOverloads() {
+        if (!overloadInstaller) return;
+        for (const std::string& base : overloadBases())
+            if (!isOverloadDispatcher(base) && !hasGlobal(base)) overloadInstaller(base);
+    }
+    // the bare names that run the runtime dispatcher (see VmRunner::installOverloads), not a function of that name
+    bool isOverloadDispatcher(const std::string& name) const { return overloadDispatchers_.count(name) > 0; }
+    void markOverloadDispatcher(const std::string& name) { overloadDispatchers_.insert(name); }
+
+    // a native that takes a number twice is a plugin bug: two plugins (or two calls) both claimed `abs__2`
+    void refuseSecondOverload(const std::string& name) const {
+        if (!overloadName(name)) return;
+        auto it = scopes_.front()->find(name);
+        if (it != scopes_.front()->end() && it->second.isCallable() && it->second.asCallable().isNative())
+            raiseError("overload", "'" + name + "' is already bound as an overload by another plugin, numbers are never reused");
+    }
+
     // bind nativefn with no sigcheck
     void bind(const std::string& name, NativeFn fn) {
+        refuseSecondOverload(name);
         scopesChanged();
         (*scopes_.front())[name] = Value::makeNative(name, std::move(fn), {});
     }
 
+    // bindSig() for a native that reads its arguments through an ArgSpan, which is the values on the VM's stack with no copy and no
+    // vector. it must be a leaf: no calling back into script code (invoke, sort_do, ...), because that can move the stack the view points
+    // into. a caller that has a vector (embr::invoke) still works, it goes through `native`
+    void bindSpan(const std::string& name, std::vector<Param> sig, std::function<Value(const ArgSpan&)> fn) {
+        refuseSecondOverload(name);
+        scopesChanged();
+        auto sp = fn;
+        Value v = Value::makeNative(name, [sp](const std::vector<Value>& a) -> Value { return sp(ArgSpan{a.data(), a.size()}); }, std::move(sig));
+        const_cast<Value::Callable&>(v.asCallable()).span = std::move(fn);
+        (*scopes_.front())[name] = std::move(v);
+    }
+
+    // binds a C++ function whose parameters are plain types: double (a number), int64_t (an int), const std::string& (a string) or const Value& (anything).
+    // the parameter list, the checks and the result type come from the signature, so there is nothing to keep in step. `names` are the parameter names
+    // in error messages. the function must be a leaf, like bindSpan's
+    template <class R, class... A>
+    void bindTyped(const std::string& name, std::initializer_list<const char*> names, R (*fn)(A...)) {
+        std::vector<Param> sig;
+        auto it = names.begin();
+        size_t n = 0;
+        auto add = [&](TypeSet t) {
+            sig.push_back(Param::req(it != names.end() ? std::string(*it++) : "arg" + std::to_string(n + 1), t));
+            ++n;
+        };
+        (add(typed::Arg<typed::Plain<A>>::type()), ...);
+        bindSpan(name, std::move(sig), [fn](const ArgSpan& a) -> Value { return typed::call(fn, a, std::index_sequence_for<A...>{}); });
+        Value::Callable& c = const_cast<Value::Callable&>(scopes_.front()->find(name)->second.asCallable());
+        c.returns = typed::Ret<typed::Plain<R>>::type();
+        if constexpr (sizeof...(A) <= 4) {   // more than four arguments go the ordinary way
+            if (!typed::typedCallsEnabled()) return;
+            c.typed.thunk = &typed::thunk<R, A...>;
+            c.typed.fn = reinterpret_cast<void*>(fn);
+            c.typed.n = (uint8_t)sizeof...(A);
+            size_t k = 0;
+            ((c.typed.mask[k++] = typed::Arg<typed::Plain<A>>::type().mask), ...);
+        }
+    }
+
+    // the same for a function that needs the interpreter: it is the first parameter of the C++ function and not one of the script's
+    template <class R, class... A>
+    void bindTyped(const std::string& name, std::initializer_list<const char*> names, R (*fn)(Interpreter&, A...)) {
+        std::vector<Param> sig;
+        auto it = names.begin();
+        size_t n = 0;
+        auto add = [&](TypeSet t) {
+            sig.push_back(Param::req(it != names.end() ? std::string(*it++) : "arg" + std::to_string(n + 1), t));
+            ++n;
+        };
+        (add(typed::Arg<typed::Plain<A>>::type()), ...);
+        bindSpan(name, std::move(sig), [this, fn](const ArgSpan& a) -> Value { return typed::callI(fn, *this, a, std::index_sequence_for<A...>{}); });
+        Value::Callable& c = const_cast<Value::Callable&>(scopes_.front()->find(name)->second.asCallable());
+        c.returns = typed::Ret<typed::Plain<R>>::type();
+        if constexpr (sizeof...(A) <= 4) {
+            if (!typed::typedCallsEnabled()) return;
+            c.typed.thunk = &typed::thunkI<R, A...>;
+            c.typed.fn = reinterpret_cast<void*>(fn);
+            c.typed.ctx = this;
+            c.typed.n = (uint8_t)sizeof...(A);
+            size_t k = 0;
+            ((c.typed.mask[k++] = typed::Arg<typed::Plain<A>>::type().mask), ...);
+        }
+    }
+
+    // says what natives already bound always return, one entry per name (see Value::Callable::returns). a name that is not a
+    // native here is ignored, so a plugin can list its functions without caring which ones were bound
+    void setResultTypes(std::initializer_list<std::pair<const char*, TypeSet>> list) {
+        for (const auto& [name, type] : list) {
+            auto it = scopes_.front()->find(name);
+            if (it == scopes_.front()->end() || !it->second.isCallable()) continue;
+            Value::Callable& c = const_cast<Value::Callable&>(it->second.asCallable());
+            if (c.isNative()) c.returns = type;
+        }
+    }
+
+    // marks natives as pure (see Value::Callable::pure): only for a native whose result depends on nothing but its arguments
+    void setPure(std::initializer_list<const char*> names) {
+        for (const char* name : names) {
+            auto it = scopes_.front()->find(name);
+            if (it == scopes_.front()->end() || !it->second.isCallable()) continue;
+            Value::Callable& c = const_cast<Value::Callable&>(it->second.asCallable());
+            if (c.isNative()) c.pure = true;
+        }
+    }
+
+    // the same for what a native returning an array or a map holds: {"str_split", TS::Str} says it returns arr<str> (or map<str>)
+    void setResultElems(std::initializer_list<std::pair<const char*, TypeSet>> list) {
+        for (const auto& [name, type] : list) {
+            auto it = scopes_.front()->find(name);
+            if (it == scopes_.front()->end() || !it->second.isCallable()) continue;
+            Value::Callable& c = const_cast<Value::Callable&>(it->second.asCallable());
+            if (c.isNative()) { auto a = std::make_shared<TypeAnn>(); a->t = type; c.returnsElem = a; }
+        }
+    }
+    // says which argument a native hands back, changed (`push(list, x)` returns list with x added): the checker gives the call the type of that argument
+    void setResultLike(std::initializer_list<std::pair<const char*, int>> list) {
+        for (const auto& [name, arg] : list) {
+            auto it = scopes_.front()->find(name);
+            if (it == scopes_.front()->end() || !it->second.isCallable()) continue;
+            Value::Callable& c = const_cast<Value::Callable&>(it->second.asCallable());
+            if (c.isNative()) c.returnsLike = arg;
+        }
+    }
+
     // bind nativefn with sig
     void bindSig(const std::string& name, std::vector<Param> sig, NativeFn fn) {
+        refuseSecondOverload(name);
         scopesChanged();
         (*scopes_.front())[name] = Value::makeNative(name, std::move(fn), std::move(sig));
     }
@@ -235,6 +479,13 @@ public:
         return scopes_.front()->erase(name) > 0;
     }
 
+    // the names bound in the native/global scope (where plugins bind), not the current module's scope
+    std::vector<std::string> nativeNames() const {
+        std::vector<std::string> out;
+        out.reserve(scopes_.front()->size());
+        for (const auto& kv : *scopes_.front()) out.push_back(kv.first);
+        return out;
+    }
     bool hasGlobal(const std::string& name) const {
         return scopes_.front()->count(name) > 0;
     }
@@ -280,36 +531,6 @@ public:
         });
     }
 
-    // capture the scope layers visible right now, for a closure being created. it captures everything from
-    // moduleBase_ upward (module globals too) as a list of the same live Scope objects, not copies. that is what
-    // lets sibling closures see each other's changes, and what keeps a module's `local` names alive after
-    // popModuleScope() (see CaptureFrame in core/value.h)
-    //
-    // returns null (meaning "just use the normal scope chain") only for a plain top-level script with nothing
-    // nested. that's a shortcut, not a correctness need: capturing scopes_[0] would be just as right
-    std::shared_ptr<CaptureFrame> captureLocals() const {
-        if (moduleBase_ == 0 && scopes_.size() <= 1) return nullptr;
-        auto frame = std::make_shared<CaptureFrame>();
-        frame->layers.assign(scopes_.begin() + moduleBase_, scopes_.end());
-        return frame;
-    }
-
-    // pushes every layer of a capture onto the live scope stack (the same objects, not copies), so a call to the
-    // closure sees and can change the environment it closed over. paired with popCapture(), which must pop exactly
-    // cap->layers.size() layers (or 1 if there was no capture). see doInvoke in tree_walker.h, the only caller
-    //
-    // a captured variable's type constraint is not carried over, so assigning to it from inside the closure is not
-    // type-checked even if it was declared typed
-    void pushCapture(const std::shared_ptr<CaptureFrame>& cap) {
-        scopesChanged();
-        if (cap) {
-            for (auto& layer : cap->layers) scopes_.push_back(layer);
-            varTypes_.resize(varTypes_.size() + cap->layers.size());
-        } else {
-            scopes_.push_back(std::make_shared<Scope>());
-            varTypes_.emplace_back();
-        }
-    }
     // returns the current module's global scope (the assignment floor)
     // for the top-level script this is scopes_[0] (the native layer)
     // for an imported module it is the module's own export scope
@@ -325,64 +546,80 @@ public:
     // variable inside its own captured scope). the gc plugin finds such cycles by mark-and-sweep over every scope:
     // whatever isn't reachable from the active call stack gets its contents cleared
     //
-    // gcRegisterScope() tracks (weakly) every Scope either backend creates. call it only where a new Scope is made,
-    // not when an existing one is pushed back on a stack (pushCapture() doesn't re-register)
+    // gcRegisterScope() tracks (weakly) every Scope a backend creates. call it only where a new Scope is made,
+    // not when an existing one is pushed back on a stack
     void gcRegisterScope(const std::shared_ptr<Scope>& s) { gcScopes_.push_back(s); }
 
-    // a plugin function only ever gets an Interpreter&, never the VmRunner, so the VM mirrors its call frames into
-    // this stack. each entry is the scopes one VM CallFrame contributes to the root set (its locals plus its
-    // captured layers), pushed and popped together with vm.h's frames_. the tree-walker needs nothing like it,
-    // its active scopes are scopes_ itself (see allScopes() above)
-    //
-    // returns the live entry, not an index, so a frame captured after being pushed (VmRunner::promoteToScope())
-    // can append its new Scope later through its own stored handle. an index isn't safe: this is one
-    // Interpreter-wide stack that several VmRunners push to (a module import runs a nested one), so a frame's
-    // position in its own frames_ says nothing about its entry's position here
-    std::shared_ptr<std::vector<std::shared_ptr<Scope>>> gcPushVmFrameRoots(std::vector<std::shared_ptr<Scope>> roots) {
-        auto entry = std::make_shared<std::vector<std::shared_ptr<Scope>>>(std::move(roots));
-        gcVmFrameRoots_.push_back(entry);
-        return entry;
+    // a plugin function only ever gets an Interpreter&, never the VmRunner, so each VmRunner registers itself here
+    // once, and the gc asks it what its running frames hold (their module scopes, locals and variable cells). nothing is
+    // pushed or popped per call. a runner takes itself out again when it is destroyed
+    struct GcFrameSource {
+        virtual void gcCollectRoots(std::vector<std::shared_ptr<Scope>>& scopes,
+                                    std::vector<const std::vector<Value>*>& slots,
+                                    std::vector<const std::vector<std::shared_ptr<Cell>>*>& cells) const = 0;
+    protected:
+        ~GcFrameSource() = default;
+    };
+    // the list is shared so a runner that outlives the Interpreter (a static one, see vm.h) can still take itself out without
+    // touching a dead Interpreter: it keeps a weak handle to the list
+    using GcFrameSourceList = std::vector<const GcFrameSource*>;
+    std::weak_ptr<GcFrameSourceList> gcAddFrameSource(const GcFrameSource* src) {
+        gcFrameSources_->push_back(src);
+        return gcFrameSources_;
     }
-    void gcPopVmFrameRoots() {
-        if (!gcVmFrameRoots_.empty()) gcVmFrameRoots_.pop_back();
-    }
-
-    // takes one frame's entries out of both root stacks by identity, searching from the top. a suspended coroutine
-    // leaves its entries in the middle of the stack while other frames come and go above it, so "pop the top" would
-    // remove the wrong ones
-    void gcReleaseVmFrame(const std::shared_ptr<std::vector<std::shared_ptr<Scope>>>& roots,
-                          const std::shared_ptr<std::vector<Value>>& slots) {
-        for (size_t i = gcVmFrameRoots_.size(); i-- > 0; )
-            if (gcVmFrameRoots_[i] == roots) { gcVmFrameRoots_.erase(gcVmFrameRoots_.begin() + i); break; }
-        for (size_t i = gcVmFrameValueRoots_.size(); i-- > 0; )
-            if (gcVmFrameValueRoots_[i] == slots) { gcVmFrameValueRoots_.erase(gcVmFrameValueRoots_.begin() + i); break; }
+    static void gcRemoveFrameSource(const std::weak_ptr<GcFrameSourceList>& handle, const GcFrameSource* src) {
+        if (auto list = handle.lock())
+            for (size_t i = list->size(); i-- > 0; )
+                if ((*list)[i] == src) { list->erase(list->begin() + i); break; }
     }
 
-    // a VM frame that no closure has captured yet keeps its locals in plain slots, not a Scope, so there is no
-    // Scope to hand gcPushVmFrameRoots(). but a Value in one of those slots (a closure, say) can still reach live
-    // Scopes the gc must not miss. same push/pop-together protocol as above, but carrying raw Values.
-    // gc.cpp reads them with gcValueRoots()
-    void gcPushVmFrameValueRoots(std::shared_ptr<std::vector<Value>> slots) {
-        gcVmFrameValueRoots_.push_back(std::move(slots));
+    // makes a variable cell and remembers it (weakly), so the gc can clear a cell that is only held by a cycle and the
+    // destructor can empty every cell. the list is pruned as it grows
+    std::shared_ptr<Cell> newCell() {
+        if (gcCells_.size() >= gcCellsPruneAt_) {
+            size_t w = 0;
+            for (auto& c : gcCells_) if (!c.expired()) gcCells_[w++] = std::move(c);
+            gcCells_.resize(w);
+            gcCellsPruneAt_ = std::max<size_t>(4096, gcCells_.size() * 2);
+        }
+        auto c = std::make_shared<Cell>();
+        gcCells_.push_back(c);
+        return c;
     }
-    void gcPopVmFrameValueRoots() {
-        if (!gcVmFrameValueRoots_.empty()) gcVmFrameValueRoots_.pop_back();
+    // every cell still alive, like gcAllLiveScopes()
+    std::vector<std::shared_ptr<Cell>> gcAllLiveCells() {
+        std::vector<std::shared_ptr<Cell>> live;
+        live.reserve(gcCells_.size());
+        size_t w = 0;
+        for (size_t r = 0; r < gcCells_.size(); ++r)
+            if (auto sp = gcCells_[r].lock()) { live.push_back(sp); gcCells_[w++] = std::move(gcCells_[r]); }
+        gcCells_.resize(w);
+        return live;
     }
-
     // scopes reachable right now from an active call stack on either
     // backend, the root set a mark phase starts from.
     std::vector<std::shared_ptr<Scope>> gcRoots() const {
         std::vector<std::shared_ptr<Scope>> roots = scopes_;
-        for (auto& frameRoots : gcVmFrameRoots_)
-            roots.insert(roots.end(), frameRoots->begin(), frameRoots->end());
+        std::vector<const std::vector<Value>*> slots;
+        std::vector<const std::vector<std::shared_ptr<Cell>>*> cells;
+        for (const GcFrameSource* src : *gcFrameSources_) src->gcCollectRoots(roots, slots, cells);
         return roots;
     }
-
-    // raw Value roots contributed by not-yet-captured VM frames, see
-    // gcPushVmFrameValueRoots() above. a mark phase must walk each Value in
-    // each of these (e.g. gc.cpp's markValue()) alongside gcRoots()'s Scopes.
-    const std::vector<std::shared_ptr<std::vector<Value>>>& gcValueRoots() const {
-        return gcVmFrameValueRoots_;
+    // the locals of every running VM frame as raw Values, and the variable cells they hold. a closure in one of them
+    // reaches scopes the mark phase must not miss (gc.cpp walks each Value with markValue())
+    std::vector<const std::vector<Value>*> gcValueRoots() const {
+        std::vector<std::shared_ptr<Scope>> scopes;
+        std::vector<const std::vector<Value>*> slots;
+        std::vector<const std::vector<std::shared_ptr<Cell>>*> cells;
+        for (const GcFrameSource* src : *gcFrameSources_) src->gcCollectRoots(scopes, slots, cells);
+        return slots;
+    }
+    std::vector<const std::vector<std::shared_ptr<Cell>>*> gcCellRoots() const {
+        std::vector<std::shared_ptr<Scope>> scopes;
+        std::vector<const std::vector<Value>*> slots;
+        std::vector<const std::vector<std::shared_ptr<Cell>>*> cells;
+        for (const GcFrameSource* src : *gcFrameSources_) src->gcCollectRoots(scopes, slots, cells);
+        return cells;
     }
 
     // a plugin container that can hold Values (a table) registers here so it gets emptied when the Interpreter is
@@ -414,6 +651,32 @@ public:
     void addGcRootProvider(GcRootProvider p) { gcRootProviders_.push_back(std::move(p)); }
     const std::vector<GcRootProvider>& gcRootProviders() const { return gcRootProviders_; }
 
+    // every native plugin imported into this interpreter: what it said about itself (embr_plugin.h, plugininfo.h), and for a
+    // plugin written in C the table its functions came from. a plugin with no description (built before there was one) has
+    // `declared` false. cRoots holds the values C code kept alive with embrp_root, the gc reads them
+    struct PluginRecord {
+        struct Fn { std::string name, doc; };
+        std::string name, version, description, path, buildId, abiTag;
+        enum class Kind { C, Cxx } kind = Kind::Cxx;
+        bool        declared = false;
+        uint32_t    abi = 0;
+        uint64_t    caps = 0, optionalCaps = 0;
+        std::vector<Fn> fns;               // what the plugin documents (a C plugin: everything it binds)
+        std::vector<std::string> bound;    // what a C++ plugin bound while it loaded (names that were not there before)
+    };
+    std::vector<PluginRecord> plugins;
+    std::set<Value*>           cRoots;
+
+    // every package (core/package.h) imported into this interpreter, by name: where it was unpacked, and the sha256 of each entry
+    // so package_path() can check a file before it hands out its path
+    struct PackageRecord {
+        std::string name, version, file, dir, id;
+        uint64_t    caps = 0;
+        std::map<std::string, std::string> sha;     // label -> hex sha256
+        std::set<std::string>              checked; // labels whose file was hashed and found right
+    };
+    std::map<std::string, PackageRecord> packages;
+
     // every scope still alive anywhere (on a stack, captured by a live
     // closure, or orphaned in an unreachable cycle), prunes dead weak_ptrs
     // from the registry as a side effect, so the registry doesn't grow
@@ -432,12 +695,34 @@ public:
         return live;
     }
 
-    const std::vector<StmtPtr>* storeProgram(std::vector<StmtPtr> prog) {
-        ownedPrograms_.push_back(std::move(prog));
-        return &ownedPrograms_.back();
-    }
-
     std::string               scriptDir;
+    // how long a script may run, for embedders and `embr --max-steps= / --timeout=`. a step is one turn of a loop or
+    // one call of a script function, which is enough to stop any script that never ends. 0 means no limit. the
+    // limit ends the run with an error that try / catch cannot catch. a native that blocks (sleep, http) is not
+    // interrupted. worker interpreters (async, parallel) get a copy
+    struct Budget {
+        uint64_t maxSteps = 0;
+        double   seconds = 0;
+        std::chrono::steady_clock::time_point deadline{};
+        bool on() const { return maxSteps != 0 || seconds > 0; }
+    };
+    Budget                    budget;
+    uint64_t                  stepsUsed = 0;
+    void setBudget(uint64_t maxSteps, double seconds) {
+        budget.maxSteps = maxSteps;
+        budget.seconds = seconds;
+        if (seconds > 0)
+            budget.deadline = std::chrono::steady_clock::now() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds));
+        stepsUsed = 0;
+        budgetOn = budget.on();
+    }
+    void setBudget(const Budget& b) { budget = b; stepsUsed = 0; budgetOn = b.on(); }   // keeps the other one's deadline
+    bool budgetOn = false;   // the VM tests this one flag on every loop turn and call
+    // where compiled modules are kept as .vmbr files (see backends/vm_bytecode.h). empty: never write one
+    std::string               cacheDir;
+    // the files of the plugins this interpreter has registered, so importing one twice (a script and a module, or the
+    // checker reading signatures before the script runs) registers it once
+    std::unordered_set<std::string> loadedPlugins_;
     PluginPolicy              pluginPolicy;       // see PluginPolicy
     // arguments after a bare `--` on the embr command line (embr script.embr -- a b c);
     // read by the os plugin's os_args()
@@ -494,13 +779,13 @@ public:
 
     // true while running inside an imported module (a top-level script never moves moduleBase_ off 0)
     // vm.h's snapshotLocals() uses it to decide whether a closure made inside a module also needs the module's
-    // top scope in its capture (same idea as captureLocals() above, different mechanism per backend)
+    // top scope in its capture
     bool insideImportedModule() const {
         return moduleBase_ != 0;
     }
 
     // a shared reference to the current module's top scope (or the script's, at moduleBase_ == 0). vm.h's
-    // snapshotLocals() adds it to a closure's CaptureFrame the way captureLocals() does, since the VM can't reach scopes_ directly
+    // snapshotLocals() adds it to a closure's CaptureFrame, since the VM can't reach scopes_ directly
     std::shared_ptr<Scope> currentModuleScope() const {
         return scopes_[moduleBase_];
     }
@@ -509,7 +794,7 @@ public:
     std::set<std::string> loadedModules_;
 
     // guards one callable invocation against unbounded native C++ stack recursion from a deeply/infinitely recursive script
-    // both backends construct one of these per call so a script that recurses too deep raises a clean, catchable EmbrError
+    // the backend constructs one of these per call so a script that recurses too deep raises a clean, catchable EmbrError
     // shared on Interpreter cuz a call chain can hop between backends and the depth must be tracked across that
     struct CallDepthGuard {
         Interpreter& i;
@@ -522,12 +807,13 @@ public:
 
     // non-RAII form of the same guard for vm whose call frame outlives the C++ function that pushed it
     // pair every enterCall() with exactly one later exitCall() when that frame is actually popped (see vm.h's pushFrame/doReturn)
-    void enterCall(const SourceRange& site = {}) {
-        if (++callDepth_ > maxCallDepth_) {
-            --callDepth_;
-            raiseError("runtime", "stack overflow: max call depth (" +
-                       std::to_string(maxCallDepth_) + ") exceeded", site, sourceMap());
-        }
+    [[gnu::always_inline]] void enterCall(const SourceRange& site = {}) {
+        if (++callDepth_ > maxCallDepth_) [[unlikely]] callTooDeep(site);
+    }
+    [[noreturn, gnu::noinline]] void callTooDeep(const SourceRange& site) {
+        --callDepth_;
+        raiseError("runtime", "stack overflow: max call depth (" +
+                   std::to_string(maxCallDepth_) + ") exceeded", site, sourceMap());
     }
     void exitCall() { --callDepth_; }
 
@@ -535,7 +821,6 @@ public:
     size_t maxCallDepth() const      { return maxCallDepth_; }
 
 private:
-    std::deque<std::vector<StmtPtr>> ownedPrograms_;
     // each layer is shared_ptr-managed so a closure's CaptureFrame can hold
     // a reference to the same live object rather than a copy of its
     // contents, see core/value.h's CaptureFrame doc comment.
@@ -544,19 +829,22 @@ private:
     // per-scope type constraints recorded by typed/auto local declarations, consulted by set()
     std::vector<std::unordered_map<std::string, TypeSet>> varTypes_;
     uint64_t                                              scopeEpoch_ = 0;
+    mutable std::unordered_map<std::string, std::pair<uint64_t, std::vector<std::pair<int, std::string>>>> overloadCache_;
+    std::unordered_map<std::string, TypeElem>             staticElems_;
 
-    // gc plugin support, see gcRegisterScope()/gcPushVmFrameRoots() above
+    // gc plugin support, see gcRegisterScope() and GcFrameSource above
     std::vector<std::weak_ptr<Scope>>                              gcScopes_;
-    std::vector<std::shared_ptr<std::vector<std::shared_ptr<Scope>>>> gcVmFrameRoots_;
-    // parallel to gcVmFrameRoots_, pushed/popped alongside it for the same
-    // frame, see gcPushVmFrameValueRoots()'s doc comment.
-    std::vector<std::shared_ptr<std::vector<Value>>> gcVmFrameValueRoots_;
+    std::unordered_set<std::string>                                overloadDispatchers_;
+    std::unordered_map<std::string, int>                           overloadHighWater_;
+    mutable std::unordered_map<const void*, std::deque<DunderCacheEntry>> dunderCache_;   // a deque: an entry keeps its address as the list grows
+    std::shared_ptr<GcFrameSourceList>                             gcFrameSources_ = std::make_shared<GcFrameSourceList>();
+    std::vector<std::weak_ptr<Cell>>                 gcCells_;
+    size_t                                           gcCellsPruneAt_ = 4096;
     std::vector<GcRootProvider>                      gcRootProviders_;
     std::vector<std::function<void()>>               teardownHooks_;
     struct Clearable { std::weak_ptr<void> owner; std::function<void()> clear; };
     std::vector<Clearable>                           clearables_;
     size_t                                           clearablePruneAt_ = 4096;
-    size_t                                           funcFloor_ = 0;   // see assignFloor()
 
     size_t                             moduleBase_ = 0;
     std::vector<size_t>                prevModuleBases_;
@@ -627,18 +915,20 @@ inline std::string dunderName(const std::string& tag, const std::string& op) {
 // treat false as "no override, fall back to the built-in behavior."
 inline bool resolveDunder(const Interpreter& interp, const Value& v, const std::string& op, Value& outFn) {
     if (!v.isPointer()) return false;
-    const std::string& tag = v.asPointer().type;
+    const Tag& tag = v.asPointer().type;
     if (tag.empty()) return false;
-    std::string name = dunderName(tag, op);
-    if (!interp.hasGlobal(name)) return false;
-    Value fn = interp.getGlobal(name);
+    // the name `__tag_op` is built once per (tag, op) and kept. the global is still looked up each time, so redefining it takes effect
+    Interpreter::DunderCacheEntry& e = interp.dunderEntry(tag.id(), op);
+    if (e.name.empty()) e.name = dunderName(tag.str(), op);
+    if (!interp.hasGlobal(e.name)) return false;
+    Value fn = interp.getGlobal(e.name);
     if (!fn.isCallable()) return false;
     outFn = std::move(fn);
     return true;
 }
 
 // maps a binary operator to the dunder op name resolveDunder() uses, or nullptr if it can't be overridden
-// shared by both backends (tree_walker.h evalBinary, vm.h Op::ADD..Op::GTE)
+// shared by every backend (vm.h Op::ADD..Op::GTE)
 // "==" and "!=" are left out on purpose: they always work structurally through Value::operator==, and letting
 // a plugin override equality could break things that rely on it (map dedup, shared_table keys, ...)
 inline const char* arithDunderOp(const std::string& op) {
@@ -647,6 +937,11 @@ inline const char* arithDunderOp(const std::string& op) {
     if (op == "*")  return "mul";
     if (op == "/")  return "div";
     if (op == "%")  return "mod";
+    if (op == "&")  return "band";
+    if (op == "|")  return "bor";
+    if (op == "^")  return "bxor";
+    if (op == "<<") return "shl";
+    if (op == ">>") return "shr";
     if (op == ">")  return "gt";
     if (op == "<")  return "lt";
     if (op == ">=") return "gte";

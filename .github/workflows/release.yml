@@ -1,6 +1,6 @@
-# release for embr. runs when a tag like v1.0.0 is pushed: builds the linux-vm-release preset (both backends),
+# release for embr. runs when a tag like v1.0.0 is pushed: builds the linux-release preset,
 # runs the tests, packs embr-<version>-linux-<arch>.tar.gz (see the CPACK_* lines in CMakeLists.txt), and
-# attaches it and the single header (embr.h) to a GitHub release.
+# attaches it, its .sha256 (install.sh checks it) and the single header (embr.h) to a GitHub release.
 #
 #   git tag v1.0.0 && git push origin v1.0.0
 #
@@ -29,17 +29,19 @@ jobs:
       - name: install dependencies
         run: sudo apt-get update && sudo apt-get install -y libffi-dev libssl-dev
       - name: configure
-        run: cmake --preset linux-vm-release -DCMAKE_CXX_FLAGS=-Werror
+        run: cmake --preset linux-release -DCMAKE_CXX_FLAGS=-Werror
       - name: build
-        run: cmake --build build/linux-vm-release -j"$(nproc)"
+        run: cmake --build build/linux-release -j"$(nproc)"
       - name: test
-        run: ctest --test-dir build/linux-vm-release -j"$(nproc)" --output-on-failure --timeout 120
+        run: ctest --test-dir build/linux-release -j"$(nproc)" --output-on-failure --timeout 120
       - name: package
-        run: cmake --build build/linux-vm-release --target package
+        run: cmake --build build/linux-release --target package
+      - name: checksum
+        run: cd build/linux-release && for f in embr-*.tar.gz; do sha256sum "$f" > "$f.sha256"; done
       - name: create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp build/linux-vm-release/generated/embr/embr.h embr.h
+          cp build/linux-release/generated/embr/embr.h embr.h
           gh release create "$GITHUB_REF_NAME" --generate-notes \
-            build/linux-vm-release/embr-*.tar.gz embr.h
+            build/linux-release/embr-*.tar.gz build/linux-release/embr-*.tar.gz.sha256 embr.h

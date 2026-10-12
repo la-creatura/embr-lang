@@ -37,15 +37,23 @@ struct UnaryExpr  : Expr { std::string op;      ExprPtr right;            UnaryE
 struct BinaryExpr : Expr { std::string op;      ExprPtr left,right;      BinaryExpr():Expr(Kind::Binary){} };
 struct LogicExpr  : Expr { ExprPtr left, right;                           LogicExpr(Kind k) : Expr(k)   {} };
 
-struct CallExpr   : Expr { ExprPtr callee;      std::vector<ExprPtr> args; CallExpr():Expr(Kind::Call)  {} };
-struct ArrayExpr  : Expr { std::vector<ExprPtr> elements;                 ArrayExpr():Expr(Kind::Array) {} };
+struct CallExpr   : Expr {
+    ExprPtr callee;      std::vector<ExprPtr> args;
+    // set by the type checker when `callee` names an overload group (`abs`) and the argument types pick one member (`abs__2`):
+    // the compiler then calls that function directly. empty: call what the name says (for a group, its runtime dispatcher)
+    mutable std::string resolved;
+    CallExpr():Expr(Kind::Call)  {}
+};
+struct ArrayExpr  : Expr {
+    std::vector<ExprPtr> elements;
+    // `[a...b]` and `[a, b...c]`: a range, not a list. `elements` are then the two or three numbers written (start, [second], end) and the
+    // array is made lazily, see Value::makeRange. the end is included, and the step is second - start (1 when there is no second)
+    bool isRange = false;
+    ArrayExpr():Expr(Kind::Array) {}
+};
 struct MapExpr    : Expr { std::vector<std::pair<ExprPtr,ExprPtr>> entries; MapExpr():Expr(Kind::Map)   {} };
 struct IndexExpr  : Expr {
     ExprPtr object,index;
-    // the tree-walker's answer to "can the key run script code", worked out the first time it is needed:
-    // -1 not yet, otherwise a Purity, plus the pure builtins the key calls (see purityOf)
-    mutable int8_t                   keyPurity = -1;
-    mutable std::vector<std::string> keyCallees;
     IndexExpr():Expr(Kind::Index) {}
 };
 // `&target` in a call argument: a variable, or an element of one (`&a`, `&a[i]`, `&a[i]["k"]`). only the parser
@@ -56,8 +64,10 @@ struct RefExpr    : Expr { ExprPtr target;                                RefExp
 struct LambdaExpr : Expr {
     std::vector<Param>          params;
     TypeSet                     returnType = TypeSet::Any();
+    TypeElem                    returnElem;
     const std::vector<StmtPtr>* body;
     std::vector<StmtPtr>        ownedBody;
+    std::vector<SourceRange>    paramRanges;   // where each parameter's name is written, for editor tools
     LambdaExpr() : Expr(Kind::Lambda) {}
 };
 
@@ -68,34 +78,49 @@ struct Stmt {
     virtual ~Stmt() = default;
 };
 
-struct AssignStmt : Stmt { ExprPtr target,value; AssignStmt():Stmt(Kind::Assign){} };
+// what the type checker worked out about an assignment to a plain variable, for the compiler (see typecheck.h):
+//   storeHint    the variable's exact type when it is known (a declared type, or the one type its first value had),
+//                otherwise any. the store tests the value against it
+//   storeProven  the value's type is inside storeHint, so the store needs no test
+struct AssignStmt : Stmt {
+    ExprPtr target,value;
+    mutable TypeSet storeHint   = TypeSet::Any();
+    mutable bool    storeProven = false;
+    // `const name = expr`: the value is worked out when the script is compiled, and the name cannot be assigned again
+    bool            isConst = false;
+    AssignStmt():Stmt(Kind::Assign){}
+};
 
 // a, b, c = expr
 // see LocalStmt for the declaring local equivalent, which additionally supports types
 struct MultiAssignStmt : Stmt {
     std::vector<std::string> names;
+    std::vector<SourceRange> nameRanges;   // where each name is written, for editor tools
     ExprPtr value;
     MultiAssignStmt():Stmt(Kind::MultiAssign){}
 };
 
 // one binding in a local declaration
 // a name, plus an optional type constraint 
-// isAuto means the type is inferred from the unpacked/assigned value at declaration time and then enforced on every later assignment
 struct DestructureTarget {
     std::string name;
     TypeSet     type = TypeSet::Any();
-    bool        isAuto = false;
+    bool        explicitType = false;   // a type was written, even if it is `any`
+    TypeElem    elem;                   // `arr<int>`: what the elements are
+    SourceRange range;                  // where the name is written, for editor tools
 };
 
 // local [type] name = expr
 // local [type] name1, [type] name2, ... = expr
-// local [type|auto] [name1, name2, ...] = expr
+// local [type] [name1, name2, ...] = expr
 // targets.size()==1 && !bracketed for no unpacking
-// everything else destructures value via the array/map unpacking rules. see Runner::unpackForDestructure in tree_walker.h
+// everything else destructures value via the array/map unpacking rules (see UNPACK in backends/vm.h)
 struct LocalStmt : Stmt {
     std::vector<DestructureTarget> targets;
     bool    bracketed = false;
     ExprPtr value;
+    // for a single target without a written type: its exact type when the checker knows it, otherwise any
+    mutable TypeSet inferredHint = TypeSet::Any();
     LocalStmt():Stmt(Kind::Local){}
 };
 struct IfStmt     : Stmt { ExprPtr cond; std::vector<StmtPtr> thenBlock,elseBlock; IfStmt():Stmt(Kind::If){} };
@@ -103,7 +128,15 @@ struct FnStmt     : Stmt {
     std::string        name;
     std::vector<Param> params;
     TypeSet            returnType = TypeSet::Any();
+    TypeElem           returnElem;
     std::vector<StmtPtr> body;
+    // written as `name(params) = expr`. the compiler may write the expression into the calls of it, see the wiki's syntax page
+    bool               isExprForm = false;
+    // `const fn`: the compiler copies the body into each call of it that names it, see the wiki's syntax page
+    bool               isTemplate = false;
+    // where the name and each parameter's name are written, for editor tools (embr lsp)
+    SourceRange              nameRange;
+    std::vector<SourceRange> paramRanges;
     FnStmt():Stmt(Kind::Fn){}
 };
 struct ReturnStmt : Stmt { ExprPtr value; ReturnStmt():Stmt(Kind::Return){} };
@@ -115,6 +148,7 @@ struct ForStmt : Stmt {
     std::string varName;
     ExprPtr iterable;
     std::vector<StmtPtr> body;
+    SourceRange keyRange, varRange;   // where the names are written, for editor tools
     ForStmt():Stmt(Kind::For){}
 };
 struct BreakStmt    : Stmt { BreakStmt():Stmt(Kind::Break){} };
@@ -126,12 +160,33 @@ struct TryStmt : Stmt {
     std::vector<StmtPtr> tryBlock;
     std::string          catchVar;
     std::vector<StmtPtr> catchBlock;
+    SourceRange          catchRange;   // where catchVar is written, for editor tools
     TryStmt():Stmt(Kind::Try){}
 };
 // import <expr>
 // the path is an expression, not only a string literal, so a script can build it (`import "plugins/" + name`),
 // like load_module() already allows. each backend evaluates it at runtime and raises if it isn't a string
 struct ImportStmt : Stmt { ExprPtr pathExpr; ImportStmt():Stmt(Kind::Import){} };
+
+// true when the expression holds a function value or a `&` argument
+inline bool hasLambdaOrRef(const Expr* e) {
+    switch (e->kind) {
+    case Expr::Kind::Lambda: case Expr::Kind::Ref: return true;
+    case Expr::Kind::Unary:  return hasLambdaOrRef(static_cast<const UnaryExpr*>(e)->right.get());
+    case Expr::Kind::Binary: { auto* b = static_cast<const BinaryExpr*>(e); return hasLambdaOrRef(b->left.get()) || hasLambdaOrRef(b->right.get()); }
+    case Expr::Kind::And: case Expr::Kind::Or: { auto* l = static_cast<const LogicExpr*>(e); return hasLambdaOrRef(l->left.get()) || hasLambdaOrRef(l->right.get()); }
+    case Expr::Kind::Index:  { auto* i = static_cast<const IndexExpr*>(e); return hasLambdaOrRef(i->object.get()) || hasLambdaOrRef(i->index.get()); }
+    case Expr::Kind::Call: {
+        auto* c = static_cast<const CallExpr*>(e);
+        if (hasLambdaOrRef(c->callee.get())) return true;
+        for (auto& a : c->args) if (hasLambdaOrRef(a.get())) return true;
+        return false;
+    }
+    case Expr::Kind::Array: for (auto& x : static_cast<const ArrayExpr*>(e)->elements) if (hasLambdaOrRef(x.get())) return true; return false;
+    case Expr::Kind::Map:   for (auto& kv : static_cast<const MapExpr*>(e)->entries) if (hasLambdaOrRef(kv.first.get()) || hasLambdaOrRef(kv.second.get())) return true; return false;
+    default: return false;
+    }
+}
 
 // how much script code an expression can run while it is worked out
 enum class Purity { CallFree, PureCalls, Impure };

@@ -1,0 +1,35 @@
+# a function written as name(params) = expr is written out at its calls, so a hot loop makes no call
+import "embrlib"
+
+sq(x) = x * x
+dist2(ax, ay, bx, by) = sq(ax - bx) + sq(ay - by)
+
+fn nearest(points, x, y)
+    local best = 0
+    local bestd = 1000000
+    local i = 0
+    while i < len(points)
+        local d = dist2(points[i][0], points[i][1], x, y)
+        if d < bestd
+            bestd = d
+            best = i
+        end
+        i += 1
+    end
+    return best
+end
+
+local pts = [[0, 0], [5, 5], [9, 1]]
+print(nearest(pts, 6, 4))
+
+# an argument is worked out once, even when the body uses it twice
+local calls = 0
+fn next_id()
+    calls += 1
+    return calls
+end
+print(sq(next_id() + 2), calls)
+
+# the function is still an ordinary variable
+local f = sq
+print(f(12))

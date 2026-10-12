@@ -20,45 +20,12 @@
             }
         },
         {
-            "name": "linux-vm-debug",
-            "generator": "Unix Makefiles",
-            "binaryDir": "build/linux-vm-debug",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_TOOLCHAIN_FILE": "cmake/linux-gcc.cmake",
-                "EMBR_WITH_TREE_WALKER": "ON",
-                "EMBR_WITH_VM": "ON"
-            }
-        },
-        {
-            "name": "linux-vm-release",
-            "generator": "Unix Makefiles",
-            "binaryDir": "build/linux-vm-release",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_TOOLCHAIN_FILE": "cmake/linux-gcc.cmake",
-                "EMBR_WITH_TREE_WALKER": "ON",
-                "EMBR_WITH_VM": "ON"
-            }
-        },
-        {
             "name": "windows-release",
             "generator": "Unix Makefiles",
             "binaryDir": "build/windows-release",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "CMAKE_TOOLCHAIN_FILE": "cmake/mingw-w64.cmake"
-            }
-        },
-        {
-            "name": "windows-vm-release",
-            "generator": "Unix Makefiles",
-            "binaryDir": "build/windows-vm-release",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_TOOLCHAIN_FILE": "cmake/mingw-w64.cmake",
-                "EMBR_WITH_TREE_WALKER": "ON",
-                "EMBR_WITH_VM": "ON"
             }
         },
         {
@@ -88,22 +55,6 @@
                 "CMAKE_BUILD_TYPE": "Release",
                 "CMAKE_TOOLCHAIN_FILE": "cmake/macos-clang.cmake"
             }
-        },
-        {
-            "name": "macos-vm-debug",
-            "generator": "Unix Makefiles",
-            "binaryDir": "build/macos-vm-debug",
-            "condition": {
-                "type": "equals",
-                "lhs": "${hostSystemName}",
-                "rhs": "Darwin"
-            },
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_TOOLCHAIN_FILE": "cmake/macos-clang.cmake",
-                "EMBR_WITH_TREE_WALKER": "ON",
-                "EMBR_WITH_VM": "ON"
-            }
         }
     ],
     "buildPresets": [
@@ -118,23 +69,8 @@
             "jobs": 0
         },
         {
-            "name": "linux-vm-debug",
-            "configurePreset": "linux-vm-debug",
-            "jobs": 0
-        },
-        {
-            "name": "linux-vm-release",
-            "configurePreset": "linux-vm-release",
-            "jobs": 0
-        },
-        {
             "name": "windows-release",
             "configurePreset": "windows-release",
-            "jobs": 0
-        },
-        {
-            "name": "windows-vm-release",
-            "configurePreset": "windows-vm-release",
             "jobs": 0
         },
         {
@@ -145,11 +81,6 @@
         {
             "name": "macos-release",
             "configurePreset": "macos-release",
-            "jobs": 0
-        },
-        {
-            "name": "macos-vm-debug",
-            "configurePreset": "macos-vm-debug",
             "jobs": 0
         }
     ]

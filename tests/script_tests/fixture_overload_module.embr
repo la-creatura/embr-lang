@@ -1,0 +1,7 @@
+# used by test_overloads.embr: a module that calls the bare name of a plugin's overload group inside a function. the module is
+# compiled before its own imports run
+import "embrmath"
+
+fn floor_it(x)
+    return math_floor(x)
+end

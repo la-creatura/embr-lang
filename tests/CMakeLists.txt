@@ -7,30 +7,29 @@
 add_test(NAME bin_dir_stamp COMMAND ${CMAKE_COMMAND}
     -DSTAMP=${BIN_DIR}/.built-by -DEXPECTED=${EMBR_BUILD_NAME} -P ${CMAKE_CURRENT_SOURCE_DIR}/check_bin_stamp.cmake)
 
+# the VM, compiled once for the suites that only run scripts (see harness_vm.cpp)
+add_library(embr_test_support STATIC harness_vm.cpp)
+target_link_libraries(embr_test_support PUBLIC embr_single_header)
+embr_use_pch(embr_test_support exe)
+
 function(add_embr_test name)
     add_executable(test_${name} ${name}_test.cpp)
-    target_link_libraries(test_${name} PRIVATE embr_single_header)
+    target_link_libraries(test_${name} PRIVATE embr_single_header embr_test_support)
+    embr_use_pch(test_${name} exe)
     set_target_properties(test_${name} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${BIN_DIR}/tests"
     )
-    # every registered test gets its OWN working directory. suites write fixture files (modules,
-    # manifests, scratch dirs) into the cwd, and on a dual-backend build the _tw and _vm
-    # registrations of one suite run concurrently under `ctest -j` -- a shared cwd let one process
-    # truncate a fixture another was loading (async_vm flaked that way). the test binaries live in
-    # bin/<platform>/tests/, so plugins/ and modules/ (one level up) are reached via EMBR_PATH.
+    # every registered test gets its OWN working directory, one per backend. suites write fixture files (modules,
+    # manifests, scratch dirs) into the cwd, and the registrations of one suite run concurrently under `ctest -j`:
+    # a shared cwd let one process truncate a fixture another was loading (async flaked that way). the test
+    # binaries live in bin/<platform>/tests/, so plugins/ and modules/ (one level up) are reached via EMBR_PATH.
+    # harness.h's runSourceAny() picks the backend from EMBR_TEST_BACKEND
     set(work_root "${BIN_DIR}/test-work")
-    if(EMBR_WITH_TREE_WALKER AND EMBR_WITH_VM)
-        # harness.h's runSourceAny() picks the backend from EMBR_TEST_BACKEND
-        file(MAKE_DIRECTORY "${work_root}/${name}_tw" "${work_root}/${name}_vm")
-        add_test(NAME ${name}_tw COMMAND test_${name} WORKING_DIRECTORY "${work_root}/${name}_tw")
-        add_test(NAME ${name}_vm COMMAND test_${name} WORKING_DIRECTORY "${work_root}/${name}_vm")
-        set_tests_properties(${name}_tw PROPERTIES ENVIRONMENT "EMBR_PATH=${BIN_DIR};EMBR_TEST_BACKEND=tree")
-        set_tests_properties(${name}_vm PROPERTIES ENVIRONMENT "EMBR_PATH=${BIN_DIR};EMBR_TEST_BACKEND=vm")
-    else()
-        file(MAKE_DIRECTORY "${work_root}/${name}")
-        add_test(NAME ${name} COMMAND test_${name} WORKING_DIRECTORY "${work_root}/${name}")
-        set_tests_properties(${name} PROPERTIES ENVIRONMENT "EMBR_PATH=${BIN_DIR}")
-    endif()
+    foreach(backend ${EMBR_BACKENDS})
+        file(MAKE_DIRECTORY "${work_root}/${name}_${backend}")
+        add_test(NAME ${name}_${backend} COMMAND test_${name} WORKING_DIRECTORY "${work_root}/${name}_${backend}")
+        set_tests_properties(${name}_${backend} PROPERTIES ENVIRONMENT "EMBR_PATH=${BIN_DIR};EMBR_TEST_BACKEND=${backend}")
+    endforeach()
 endfunction()
 
 add_embr_test(core)  # language + embrlib (the "batteries" stdlib)
@@ -62,24 +61,33 @@ add_embr_test(pkg_embr)
 add_embr_test(gc)
 add_embr_test(coroutine)
 add_embr_test(vm_internals)
+add_embr_test(bytecode)
+add_embr_test(ed25519)   # core/ed25519.h against known signatures and digests
+add_embr_test(typecheck)
 
 # a regression here (VmRunner::inject() mis-splicing on a second call, see
 # vm_internals_test.cpp's own header) manifests as an infinite loop, not a
 # clean failure -- a short TIMEOUT turns that into a fast, legible CTest
 # failure instead of hanging the whole suite/CI.
-if(EMBR_WITH_TREE_WALKER AND EMBR_WITH_VM)
-    set_tests_properties(vm_internals_tw vm_internals_vm PROPERTIES TIMEOUT 10)
-else()
-    set_tests_properties(vm_internals PROPERTIES TIMEOUT 10)
-endif()
+foreach(backend ${EMBR_BACKENDS})
+    set_tests_properties(vm_internals_${backend} PROPERTIES TIMEOUT 10)
+endforeach()
 
 add_dependencies(test_core       embrlib_plugin)
+add_dependencies(test_bytecode   embrlib_plugin)
 add_dependencies(test_str        str_plugin)
 add_dependencies(test_unicode    unicode_plugin)
 add_dependencies(test_json       json_plugin embrlib_plugin)
 add_dependencies(test_embrtypes  embrtypes_plugin ffi_plugin)
 add_dependencies(test_ffi        ffi_plugin embrtypes_plugin embrlib_plugin)
-add_dependencies(test_embrmath   embrmath_plugin)
+
+# a small C library the ffi tests call, for callbacks libc can't test (see ffi_fixture.cpp). the test opens it by a
+# path relative to its working folder, bin/<platform>/test-work/ffi_<backend>
+add_library(ffi_fixture SHARED ffi_fixture.cpp)
+set_target_properties(ffi_fixture PROPERTIES PREFIX "" LIBRARY_OUTPUT_DIRECTORY "${BIN_DIR}/tests" RUNTIME_OUTPUT_DIRECTORY "${BIN_DIR}/tests")
+add_dependencies(test_ffi ffi_fixture)
+target_compile_definitions(test_ffi PRIVATE EMBR_TEST_FIXTURE="../../tests/$<TARGET_FILE_NAME:ffi_fixture>")
+add_dependencies(test_embrmath   embrmath_plugin embrlib_plugin json_plugin)
 add_dependencies(test_fs         fs_plugin embrlib_plugin)
 add_dependencies(test_path       path_plugin)
 add_dependencies(test_os         os_plugin embrlib_plugin)
@@ -98,7 +106,7 @@ add_dependencies(test_parallel_embr parallel_module parallel_plugin embrlib_plug
 add_dependencies(test_async      async_plugin embrlib_plugin table_plugin time_plugin)
 add_dependencies(test_dunder     embrtypes_plugin json_plugin table_plugin embrlib_plugin ffi_plugin str_plugin)
 add_dependencies(test_http       http_plugin)
-add_dependencies(test_pkg_embr   pkg_module http_plugin json_plugin fs_plugin str_plugin embrlib_plugin)
+add_dependencies(test_pkg_embr   pkg_module http_plugin json_plugin fs_plugin str_plugin embrlib_plugin embrmeta_plugin)
 add_dependencies(test_gc         gc_plugin table_plugin vec_plugin ffi_plugin embrtypes_plugin embrlib_plugin)
 add_dependencies(test_coroutine  coroutine_plugin)
 
@@ -108,26 +116,21 @@ add_dependencies(test_coroutine  coroutine_plugin)
 find_program(BASH_EXE bash)
 if(BASH_EXE AND NOT WIN32)
     set(https_work "${BIN_DIR}/test-work")
-    if(EMBR_WITH_TREE_WALKER AND EMBR_WITH_VM)
-        file(MAKE_DIRECTORY "${https_work}/https_tw" "${https_work}/https_vm")
-        add_test(NAME https_tw COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/https_smoke.sh $<TARGET_FILE:embr>
-                 WORKING_DIRECTORY "${https_work}/https_tw")
-        add_test(NAME https_vm COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/https_smoke.sh $<TARGET_FILE:embr> --vm
-                 WORKING_DIRECTORY "${https_work}/https_vm")
-        set_tests_properties(https_tw https_vm PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
-        add_dependencies(embr http_plugin)
-    else()
-        file(MAKE_DIRECTORY "${https_work}/https")
-        # a VM-only build has no tree-walker to fall back on, so it must be told to use the VM
-        set(https_vm_flag "")
-        if(EMBR_WITH_VM AND NOT EMBR_WITH_TREE_WALKER)
-            set(https_vm_flag "--vm")
-        endif()
-        add_test(NAME https COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/https_smoke.sh $<TARGET_FILE:embr> ${https_vm_flag}
-                 WORKING_DIRECTORY "${https_work}/https")
-        set_tests_properties(https PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
-        add_dependencies(embr http_plugin)
-    endif()
+    foreach(backend ${EMBR_BACKENDS})
+        file(MAKE_DIRECTORY "${https_work}/https_${backend}")
+        add_test(NAME https_${backend} COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/https_smoke.sh $<TARGET_FILE:embr> --backend=${backend}
+                 WORKING_DIRECTORY "${https_work}/https_${backend}")
+        set_tests_properties(https_${backend} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+    endforeach()
+    add_dependencies(embr http_plugin)
+
+    # the response size limit, against a local plain-http server (skips without python3)
+    foreach(backend ${EMBR_BACKENDS})
+        file(MAKE_DIRECTORY "${https_work}/http_limit_${backend}")
+        add_test(NAME http_limit_${backend} COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/http_limit_smoke.sh $<TARGET_FILE:embr> --backend=${backend}
+                 WORKING_DIRECTORY "${https_work}/http_limit_${backend}")
+        set_tests_properties(http_limit_${backend} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+    endforeach()
 endif()
 
 # the docs live in the GitHub wiki (the wiki/ submodule). the docs checks below read it through EMBR_WIKI_DIR, see the
@@ -144,13 +147,18 @@ if(PYTHON3_EXE)
 endif()
 
 if(PYTHON3_EXE)
-    add_test(NAME lsp_smoke COMMAND ${PYTHON3_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/lsp_smoke.py $<TARGET_FILE:embr>)
+    add_test(NAME lsp_smoke COMMAND ${PYTHON3_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/lsp_smoke.py ${EMBR_DRIVER_CMD})
+endif()
+# types into the REPL through a pseudo-terminal, so its line editor runs (posix only: python's pty module)
+if(PYTHON3_EXE AND NOT WIN32)
+    add_test(NAME repl_smoke COMMAND ${PYTHON3_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/repl_smoke.py $<TARGET_FILE:embr>)
+    set_tests_properties(repl_smoke PROPERTIES TIMEOUT 60)
 endif()
 # runs the tagged code blocks in the wiki pages on every backend, checks the numbers the wiki states, and checks
 # that every plugin and module has a wiki page (skipped, exit 77, without EMBR_WIKI_DIR)
 if(PYTHON3_EXE)
     add_test(NAME docs_examples COMMAND ${PYTHON3_EXE} ${CMAKE_SOURCE_DIR}/tools/docs/check_wiki.py
-             --embr ${BIN_DIR}/embr --include ${CMAKE_BINARY_DIR}/generated --wiki "${EMBR_WIKI_DIR}")
+             --embr ${EMBR_DRIVER_CMD} --include ${CMAKE_BINARY_DIR}/generated --wiki "${EMBR_WIKI_DIR}")
     set_tests_properties(docs_examples PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
@@ -163,14 +171,14 @@ set_tests_properties(regex_engine_diff PROPERTIES SKIP_RETURN_CODE 77)
 
 # the real `embr` binary on malformed / edge-case scripts: must report an error, never crash (see cli_smoke.sh)
 if(BASH_EXE AND NOT WIN32)
-    if(EMBR_WITH_TREE_WALKER AND EMBR_WITH_VM)
-        add_test(NAME cli_smoke_tw COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_smoke.sh $<TARGET_FILE:embr>)
-        add_test(NAME cli_smoke_vm COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_smoke.sh $<TARGET_FILE:embr> --vm)
-    elseif(EMBR_WITH_VM)
-        add_test(NAME cli_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_smoke.sh $<TARGET_FILE:embr> --vm)
-    else()
-        add_test(NAME cli_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_smoke.sh $<TARGET_FILE:embr>)
-    endif()
+    foreach(backend ${EMBR_BACKENDS})
+        add_test(NAME cli_smoke_${backend} COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_smoke.sh $<TARGET_FILE:embr> --backend=${backend})
+    endforeach()
+endif()
+
+# the .vmbr cache of compiled scripts: written only with --cache-dir, reused while unchanged, damage is a miss (see bytecode_smoke.sh)
+if(BASH_EXE AND NOT WIN32)
+    add_test(NAME bytecode_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/bytecode_smoke.sh $<TARGET_FILE:embr> ${CMAKE_SOURCE_DIR}/examples)
 endif()
 
 # `cmake --install` into a temp prefix, then run scripts from there: plugins and modules must be found (see install_smoke.sh)
@@ -178,39 +186,76 @@ if(BASH_EXE AND NOT WIN32)
     add_test(NAME install_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/install_smoke.sh ${CMAKE_BINARY_DIR} ${CMAKE_PROJECT_VERSION})
 endif()
 
+# install.sh and uninstall.sh in a fake home folder, from a tarball made out of `cmake --install` (see installer_smoke.sh)
+if(BASH_EXE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME installer_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/installer_smoke.sh ${CMAKE_BINARY_DIR} ${CMAKE_PROJECT_VERSION} ${CMAKE_SOURCE_DIR})
+endif()
+
 # `embr fmt`: golden file, idempotence over every repo .embr file, --check (see fmt_smoke.sh)
 if(BASH_EXE AND NOT WIN32)
     add_test(NAME fmt_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/fmt_smoke.sh $<TARGET_FILE:embr> ${CMAKE_SOURCE_DIR})
 endif()
 
+# small C plugins the sandbox smoke test loads: one built for another ABI, one that asks for the filesystem
+enable_language(C)
+foreach(cp cp_badabi cp_needs_fs)
+    add_library(${cp}_plugin SHARED cplugins/${cp}.c)
+    target_include_directories(${cp}_plugin PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    set_target_properties(${cp}_plugin PROPERTIES OUTPUT_NAME ${cp} PREFIX "" C_VISIBILITY_PRESET hidden
+        LIBRARY_OUTPUT_DIRECTORY "${BIN_DIR}/plugins" RUNTIME_OUTPUT_DIRECTORY "${BIN_DIR}/plugins")
+endforeach()
+
+# C++ plugins for the sandbox and plugin-info smoke tests: one that does not describe itself, one with a wrong C++ ABI, one with the right
+# ABI from another toolchain (loaded with a warning), one that
+# needs the network (refused before its embr_register runs)
+foreach(cp cp_undeclared cp_badbuild cp_sameabi cp_caps)
+    add_library(${cp}_plugin SHARED cplugins/${cp}.cpp)
+    target_link_libraries(${cp}_plugin PRIVATE embr_single_header)
+    embr_use_pch(${cp}_plugin pic)
+    set_target_properties(${cp}_plugin PROPERTIES OUTPUT_NAME ${cp} PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY "${BIN_DIR}/plugins" RUNTIME_OUTPUT_DIRECTORY "${BIN_DIR}/plugins")
+endforeach()
+
 # sandbox / plugin allow-list, including escape attempts (see sandbox_smoke.sh)
 if(BASH_EXE AND NOT WIN32)
-    if(EMBR_WITH_TREE_WALKER AND EMBR_WITH_VM)
-        add_test(NAME sandbox_smoke_tw COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/sandbox_smoke.sh $<TARGET_FILE:embr>)
-        add_test(NAME sandbox_smoke_vm COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/sandbox_smoke.sh $<TARGET_FILE:embr> --vm)
-    elseif(EMBR_WITH_VM)
-        add_test(NAME sandbox_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/sandbox_smoke.sh $<TARGET_FILE:embr> --vm)
-    else()
-        add_test(NAME sandbox_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/sandbox_smoke.sh $<TARGET_FILE:embr>)
-    endif()
+    foreach(backend ${EMBR_BACKENDS})
+        add_test(NAME sandbox_smoke_${backend} COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/sandbox_smoke.sh $<TARGET_FILE:embr> --backend=${backend})
+    endforeach()
+endif()
+
+# `embr plugins` / `embr plugin NAME`, their JSON, and the doc line in the language server's hover (see plugin_info_smoke.sh)
+if(BASH_EXE AND NOT WIN32)
+    add_test(NAME plugin_info_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/plugin_info_smoke.sh $<TARGET_FILE:embr>)
+endif()
+
+# `embr module` / `embr modules` / `embr check` on a module's declaration, and the editor hover on a module function
+# (see module_info_smoke.sh)
+if(BASH_EXE AND NOT WIN32)
+    add_test(NAME module_info_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/module_info_smoke.sh $<TARGET_FILE:embr>)
+endif()
+
+# `embr pack` / `embr package` and `import` of a .pmbr package: plugin, module, module with a bundled library, and what is refused
+# (see package_smoke.sh)
+if(BASH_EXE AND NOT WIN32)
+    add_test(NAME package_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/package_smoke.sh $<TARGET_FILE:embr>)
+endif()
+
+# the package registry index: its schema (tools/pkg/registry.schema.json), the checker, and the example index
+if(PYTHON3_EXE)
+    add_test(NAME pkg_registry_schema COMMAND ${PYTHON3_EXE} ${CMAKE_SOURCE_DIR}/tools/pkg/check_registry.py --selftest)
+    add_test(NAME pkg_registry_example COMMAND ${PYTHON3_EXE} ${CMAKE_SOURCE_DIR}/tools/pkg/check_registry.py ${CMAKE_SOURCE_DIR}/tools/pkg/example-index.json)
+endif()
+
+# the version of every plugin and shipped module against tools/plugins/api.lock.json (the version rule is in api_lock.py)
+if(PYTHON3_EXE)
+    add_test(NAME plugin_api_lock COMMAND ${PYTHON3_EXE} ${CMAKE_SOURCE_DIR}/tools/plugins/api_lock.py check ${EMBR_DRIVER_CMD})
 endif()
 
 # script tests: real embr test files (tests/script_tests/test_*.embr) run by `embr test`, dogfooding the runner
-# and cross-checking core language behaviour on each backend
-if(EMBR_WITH_TREE_WALKER AND EMBR_WITH_VM)
-    file(MAKE_DIRECTORY "${BIN_DIR}/test-work/script_tests_tw" "${BIN_DIR}/test-work/script_tests_vm")
-    add_test(NAME script_tests_tw COMMAND $<TARGET_FILE:embr> test ${CMAKE_CURRENT_SOURCE_DIR}/script_tests
-             WORKING_DIRECTORY "${BIN_DIR}/test-work/script_tests_tw")
-    add_test(NAME script_tests_vm COMMAND $<TARGET_FILE:embr> --vm test ${CMAKE_CURRENT_SOURCE_DIR}/script_tests
-             WORKING_DIRECTORY "${BIN_DIR}/test-work/script_tests_vm")
-    set_tests_properties(script_tests_tw script_tests_vm PROPERTIES ENVIRONMENT "EMBR_PATH=${BIN_DIR}")
-else()
-    file(MAKE_DIRECTORY "${BIN_DIR}/test-work/script_tests")
-    set(script_vm_flag "")
-    if(EMBR_WITH_VM AND NOT EMBR_WITH_TREE_WALKER)
-        set(script_vm_flag "--vm")
-    endif()
-    add_test(NAME script_tests COMMAND $<TARGET_FILE:embr> ${script_vm_flag} test ${CMAKE_CURRENT_SOURCE_DIR}/script_tests
-             WORKING_DIRECTORY "${BIN_DIR}/test-work/script_tests")
-    set_tests_properties(script_tests PROPERTIES ENVIRONMENT "EMBR_PATH=${BIN_DIR}")
-endif()
+# on each backend
+foreach(backend ${EMBR_BACKENDS})
+    file(MAKE_DIRECTORY "${BIN_DIR}/test-work/script_tests_${backend}")
+    add_test(NAME script_tests_${backend} COMMAND embr --backend=${backend} test ${CMAKE_CURRENT_SOURCE_DIR}/script_tests
+             WORKING_DIRECTORY "${BIN_DIR}/test-work/script_tests_${backend}")
+    set_tests_properties(script_tests_${backend} PROPERTIES ENVIRONMENT "EMBR_PATH=${BIN_DIR}")
+endforeach()

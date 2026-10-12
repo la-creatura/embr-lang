@@ -30,9 +30,7 @@ static Param pOpt(std::string n, TypeSet m = TS::Any) { return Param::opt(std::m
     raiseError("[str:" + fn + "]", msg);
 }
 
-Value str_split(const std::vector<Value>& args) {
-    const std::string& str = args[0].asString();
-    const std::string& sep = args[1].asString();
+Value str_split(const std::string& str, const std::string& sep) {
     std::vector<Value> result;
 
     if (sep.empty()) {
@@ -48,101 +46,85 @@ Value str_split(const std::vector<Value>& args) {
     return Value(result);
 }
 
-Value str_replace(const std::vector<Value>& args) {
-    std::string s = args[0].asString();
-    const std::string& oldStr = args[1].asString();
-    const std::string& newStr = args[2].asString();
+std::string str_replace(const std::string& in, const std::string& oldStr, const std::string& newStr) {
     if (oldStr.empty()) throwError("str_replace", "'old' cannot be empty");
 
-    size_t pos = 0;
-    while ((pos = s.find(oldStr, pos)) != std::string::npos) {
-        s.replace(pos, oldStr.size(), newStr);
-        pos += newStr.size();
+    // builds the result by appending, left to right. replacing inside one string shifts the rest of it on every match,
+    // which is quadratic on a long string
+    std::string out;
+    out.reserve(in.size());
+    size_t pos = 0, at;
+    while ((at = in.find(oldStr, pos)) != std::string::npos) {
+        out.append(in, pos, at - pos);
+        out += newStr;
+        pos = at + oldStr.size();
     }
-    return Value(s);
+    out.append(in, pos, std::string::npos);
+    return out;
 }
 
-Value str_strip(const std::vector<Value>& args) {
-    std::string s = args[0].asString();
-    std::string chars = " \t\n\r\f\v";
+std::string str_strip(const std::string& s) {
+    const char* chars = " \t\n\r\f\v";
     size_t start = s.find_first_not_of(chars);
-    if (start == std::string::npos) return Value(std::string(""));
+    if (start == std::string::npos) return std::string();
     size_t end = s.find_last_not_of(chars);
-    return Value(s.substr(start, end - start + 1));
+    return s.substr(start, end - start + 1);
 }
 
-Value str_lower(const std::vector<Value>& args) {
-    std::string s = args[0].asString();
+std::string str_lower(const std::string& in) {
+    std::string s = in;
     std::transform(s.begin(), s.end(), s.begin(), ::tolower);
-    return Value(s);
+    return s;
 }
 
-Value str_upper(const std::vector<Value>& args) {
-    std::string s = args[0].asString();
+std::string str_upper(const std::string& in) {
+    std::string s = in;
     std::transform(s.begin(), s.end(), s.begin(), ::toupper);
-    return Value(s);
+    return s;
 }
 
-Value str_find(const std::vector<Value>& args) {
+Value str_find(const ArgSpan& args) {
     size_t startPos = 0;
     if (args.size() >= 3) {
         int64_t p = numToInt64(args[2], "str_find", "start");
         startPos = p < 0 ? 0 : (size_t)p;
     }
     size_t pos = args[0].asString().find(args[1].asString(), startPos);
-    return Value(pos == std::string::npos ? -1.0 : (double)pos);
+    return Value(pos == std::string::npos ? (int64_t)-1 : (int64_t)pos);
 }
 
-Value str_startswith(const std::vector<Value>& args) {
-    const std::string& s  = args[0].asString();
-    const std::string& p  = args[1].asString();
-    return Value((s.size() >= p.size() && s.compare(0, p.size(), p) == 0) ? 1.0 : 0.0);
+bool str_startswith(const std::string& s, const std::string& p) {
+    return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
 }
 
-Value str_endswith(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
-    const std::string& f = args[1].asString();
-    return Value((s.size() >= f.size() && s.compare(s.size()-f.size(), f.size(), f) == 0) ? 1.0 : 0.0);
+bool str_endswith(const std::string& s, const std::string& f) {
+    return s.size() >= f.size() && s.compare(s.size() - f.size(), f.size(), f) == 0;
 }
 
-Value str_isdigit(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
-    return Value((!s.empty() && std::all_of(s.begin(), s.end(), ::isdigit)) ? 1.0 : 0.0);
-}
+bool str_isdigit(const std::string& s) { return !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit); }
+bool str_isalpha(const std::string& s) { return !s.empty() && std::all_of(s.begin(), s.end(), ::isalpha); }
+bool str_isalnum(const std::string& s) { return !s.empty() && std::all_of(s.begin(), s.end(), ::isalnum); }
 
-Value str_isalpha(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
-    return Value((!s.empty() && std::all_of(s.begin(), s.end(), ::isalpha)) ? 1.0 : 0.0);
-}
-
-Value str_isalnum(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
-    return Value((!s.empty() && std::all_of(s.begin(), s.end(), ::isalnum)) ? 1.0 : 0.0);
-}
-
-Value str_count(const std::vector<Value>& args) {
-    const std::string& s   = args[0].asString();
-    const std::string& sub = args[1].asString();
-    if (sub.empty()) return Value(0.0);
+int64_t str_count(const std::string& s, const std::string& sub) {
+    if (sub.empty()) return 0;
     size_t count = 0, pos = 0;
     while ((pos = s.find(sub, pos)) != std::string::npos) { ++count; pos += sub.size(); }
-    return Value((double)count);
+    return (int64_t)count;
 }
 
-Value str_ord(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
+int64_t str_ord(const std::string& s) {
     if (s.empty()) throwError("ord", "empty string");
-    return Value((double)(unsigned char)s[0]);
+    return (int64_t)(unsigned char)s[0];
 }
 
-Value str_chr(const std::vector<Value>& args) {
+Value str_chr(const ArgSpan& args) {
     if (!args[0].isNumeric()) throwError("chr", "argument must be a number");
     int64_t code = numToInt64(args[0], "chr", "argument");
     if (code < 0 || code > 255) throwError("chr", "code point out of range (0-255)");
     return Value(std::string(1, (char)code));
 }
 
-Value str_repeat(const std::vector<Value>& args) {
+Value str_repeat(const ArgSpan& args) {
     const std::string& s = args[0].asString();
     int64_t n = numToInt64(args[1], "str_repeat", "count");
     if (n < 0) throwError("str_repeat", "count must not be negative");
@@ -155,13 +137,13 @@ Value str_repeat(const std::vector<Value>& args) {
     return Value(std::move(out));
 }
 
-Value str_reverse(const std::vector<Value>& args) {
-    std::string s = args[0].asString();
+std::string str_reverse(const std::string& in) {
+    std::string s = in;
     std::reverse(s.begin(), s.end());
-    return Value(std::move(s));
+    return s;
 }
 
-Value str_pad_left(const std::vector<Value>& args) {
+Value str_pad_left(const ArgSpan& args) {
     std::string s = args[0].asString();
     int64_t width = numToInt64(args[1], "str_pad_left", "width");
     std::string ch = args.size() >= 3 ? args[2].asString() : " ";
@@ -171,7 +153,7 @@ Value str_pad_left(const std::vector<Value>& args) {
     return Value(std::string((size_t)width - s.size(), ch[0]) + s);
 }
 
-Value str_pad_right(const std::vector<Value>& args) {
+Value str_pad_right(const ArgSpan& args) {
     std::string s = args[0].asString();
     int64_t width = numToInt64(args[1], "str_pad_right", "width");
     std::string ch = args.size() >= 3 ? args[2].asString() : " ";
@@ -181,20 +163,16 @@ Value str_pad_right(const std::vector<Value>& args) {
     return Value(s + std::string((size_t)width - s.size(), ch[0]));
 }
 
-Value str_ltrim(const std::vector<Value>& args) {
-    std::string s = args[0].asString();
-    std::string chars = " \t\n\r\f\v";
-    size_t start = s.find_first_not_of(chars);
-    if (start == std::string::npos) return Value(std::string(""));
-    return Value(s.substr(start));
+std::string str_ltrim(const std::string& s) {
+    size_t start = s.find_first_not_of(" \t\n\r\f\v");
+    if (start == std::string::npos) return std::string();
+    return s.substr(start);
 }
 
-Value str_rtrim(const std::vector<Value>& args) {
-    std::string s = args[0].asString();
-    std::string chars = " \t\n\r\f\v";
-    size_t end = s.find_last_not_of(chars);
-    if (end == std::string::npos) return Value(std::string(""));
-    return Value(s.substr(0, end + 1));
+std::string str_rtrim(const std::string& s) {
+    size_t end = s.find_last_not_of(" \t\n\r\f\v");
+    if (end == std::string::npos) return std::string();
+    return s.substr(0, end + 1);
 }
 
 // ---- str_format ---------------------------------------------------------------------------------
@@ -321,7 +299,7 @@ std::string formatOne(const Value& v, const Spec& sp) {
 
 } // namespace fmt
 
-Value str_format(const std::vector<Value>& args) {
+Value str_format(const ArgSpan& args) {
     const std::string& t = args[0].asString();
     size_t nargs = args.size() - 1, nextAuto = 0;
     int mode = 0;                                             // 0 undecided, 1 automatic, 2 explicit
@@ -360,7 +338,7 @@ Value str_format(const std::vector<Value>& args) {
 }
 
 // num_fixed(x: num, digits: num) -> str    (num_fixed(3.14159, 2) -> "3.14"; digits 0..100)
-Value num_fixed(const std::vector<Value>& args) {
+Value num_fixed(const ArgSpan& args) {
     int64_t d = numToInt64(args[1], "num_fixed", "digits");
     if (d < 0 || d > 100) throwError("num_fixed", "digits must be between 0 and 100");
     fmt::Spec sp; sp.type = 'f'; sp.prec = (int)d;
@@ -368,26 +346,70 @@ Value num_fixed(const std::vector<Value>& args) {
 }
 
 EMBR_PLUGIN {
-    interp->bindSig("str_split",      {pStr("string"), pStr("separator")}, str_split);
-    interp->bindSig("str_replace",    {pStr("string"), pStr("old"), pStr("new")}, str_replace);
-    interp->bindSig("str_strip",      {pStr("string")}, str_strip);
-    interp->bindSig("str_lower",      {pStr("string")}, str_lower);
-    interp->bindSig("str_upper",      {pStr("string")}, str_upper);
-    interp->bindSig("str_find",       {pStr("string"), pStr("substring"), pOpt("start_pos", TS::Num)}, str_find);
-    interp->bindSig("str_startswith", {pStr("string"), pStr("prefix")}, str_startswith);
-    interp->bindSig("str_endswith",   {pStr("string"), pStr("suffix")}, str_endswith);
-    interp->bindSig("str_isdigit",    {pStr("string")}, str_isdigit);
-    interp->bindSig("str_isalpha",    {pStr("string")}, str_isalpha);
-    interp->bindSig("str_isalnum",    {pStr("string")}, str_isalnum);
-    interp->bindSig("str_count",      {pStr("string"), pStr("substring")}, str_count);
-    interp->bindSig("str_ord",        {pStr("char")},   str_ord);
-    interp->bindSig("str_chr",        {pNum("ord")},    str_chr);
-    interp->bindSig("str_repeat",     {pStr("string"), pNum("count")}, str_repeat);
-    interp->bindSig("str_reverse",    {pStr("string")}, str_reverse);
-    interp->bindSig("str_pad_left",   {pStr("string"), pNum("width"), pOpt("pad_char", TS::Str)}, str_pad_left);
-    interp->bindSig("str_pad_right",  {pStr("string"), pNum("width"), pOpt("pad_char", TS::Str)}, str_pad_right);
-    interp->bindSig("str_format",     {pStr("template"), Param::rest("args", TS::Any)}, str_format);
-    interp->bindSig("num_fixed",      {pNum("x"), pNum("digits")}, num_fixed);
-    interp->bindSig("str_ltrim",      {pStr("string")}, str_ltrim);
-    interp->bindSig("str_rtrim",      {pStr("string")}, str_rtrim);
+    interp->bindTyped("str_split",      {"string", "separator"}, str_split);
+    interp->bindTyped("str_replace",    {"string", "old", "new"}, str_replace);
+    interp->bindTyped("str_strip",      {"string"}, str_strip);
+    interp->bindTyped("str_lower",      {"string"}, str_lower);
+    interp->bindTyped("str_upper",      {"string"}, str_upper);
+    interp->bindSpan("str_find",       {pStr("string"), pStr("substring"), pOpt("start_pos", TS::Num)}, str_find);
+    interp->bindTyped("str_startswith", {"string", "prefix"}, str_startswith);
+    interp->bindTyped("str_endswith",   {"string", "suffix"}, str_endswith);
+    interp->bindTyped("str_isdigit",    {"string"}, str_isdigit);
+    interp->bindTyped("str_isalpha",    {"string"}, str_isalpha);
+    interp->bindTyped("str_isalnum",    {"string"}, str_isalnum);
+    interp->bindTyped("str_count",      {"string", "substring"}, str_count);
+    interp->bindTyped("str_ord",        {"char"}, str_ord);
+    interp->bindSpan("str_chr",        {pNum("ord")},    str_chr);
+    interp->bindSpan("str_repeat",     {pStr("string"), pNum("count")}, str_repeat);
+    interp->bindTyped("str_reverse",    {"string"}, str_reverse);
+    interp->bindSpan("str_pad_left",   {pStr("string"), pNum("width"), pOpt("pad_char", TS::Str)}, str_pad_left);
+    interp->bindSpan("str_pad_right",  {pStr("string"), pNum("width"), pOpt("pad_char", TS::Str)}, str_pad_right);
+    interp->bindSpan("str_format",     {pStr("template"), Param::rest("args", TS::Any)}, str_format);
+    interp->bindSpan("num_fixed",      {pNum("x"), pNum("digits")}, num_fixed);
+    interp->bindTyped("str_ltrim",      {"string"}, str_ltrim);
+    interp->bindTyped("str_rtrim",      {"string"}, str_rtrim);
+
+    // what each always returns (see Value::Callable::returns). the yes/no ones give the int 1 or 0, like a comparison
+    interp->setResultTypes({
+        {"str_split", TS::Arr}, {"str_replace", TS::Str}, {"str_strip", TS::Str}, {"str_lower", TS::Str}, {"str_upper", TS::Str},
+        {"str_find", TS::Int}, {"str_startswith", TS::Int}, {"str_endswith", TS::Int},
+        {"str_isdigit", TS::Int}, {"str_isalpha", TS::Int}, {"str_isalnum", TS::Int},
+        {"str_count", TS::Int}, {"str_ord", TS::Int}, {"str_chr", TS::Str}, {"str_repeat", TS::Str}, {"str_reverse", TS::Str},
+        {"str_pad_left", TS::Str}, {"str_pad_right", TS::Str}, {"str_format", TS::Str}, {"num_fixed", TS::Str},
+        {"str_ltrim", TS::Str}, {"str_rtrim", TS::Str},
+    });
+
+    // the same answer for the same arguments and no side effects, so a const may call them while compiling
+    interp->setPure({
+        "str_split", "str_replace", "str_strip", "str_lower", "str_upper", "str_find", "str_startswith",
+        "str_endswith", "str_isdigit", "str_isalpha", "str_isalnum", "str_count", "str_ord", "str_chr",
+        "str_repeat", "str_reverse", "str_pad_left", "str_pad_right", "str_format", "num_fixed",
+        "str_ltrim", "str_rtrim",
+    });
+    interp->setResultElems({{"str_split", TS::Str}});
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("str", "1.0.0", "split, replace, strip, case, find, pad and format for byte strings", EMBR_CAP_NONE, EMBR_CAP_NONE,
+    {"num_fixed", "x written with exactly `digits` decimals (0 to 100), like printf's %.Nf"},
+    {"str_chr", "raises outside 0–255"},
+    {"str_count", "non-overlapping; 0 if substring empty"},
+    {"str_endswith", "1 if the string ends with suffix, else 0"},
+    {"str_find", "-1 if not found"},
+    {"str_format", "fills {} and {N} placeholders, each with an optional :SPEC (fill, align, sign, #, 0, width, .precision, type). see the wiki page for the grammar"},
+    {"str_isalnum", "1 iff non-empty and every char qualifies"},
+    {"str_isalpha", "1 iff non-empty and every char qualifies"},
+    {"str_isdigit", "1 iff non-empty and every char qualifies"},
+    {"str_lower", "the string with ASCII letters in lower case"},
+    {"str_ltrim", "trims \" \\t\\n\\r\\f\\v\""},
+    {"str_ord", "raises on empty string"},
+    {"str_pad_left", "default pad \" \"; raises if pad_char isn't exactly 1 char"},
+    {"str_pad_right", "default pad \" \"; raises if pad_char isn't exactly 1 char"},
+    {"str_repeat", "raises on negative count"},
+    {"str_replace", "raises if old is empty"},
+    {"str_reverse", "the string with its bytes in reverse order (not code points)"},
+    {"str_rtrim", "trims \" \\t\\n\\r\\f\\v\""},
+    {"str_split", "empty separator splits into characters"},
+    {"str_startswith", "1 if the string starts with prefix, else 0"},
+    {"str_strip", "trims \" \\t\\n\\r\\f\\v\""},
+    {"str_upper", "the string with ASCII letters in upper case"});

@@ -1,0 +1,12 @@
+# made by `tree-sitter generate` / `npm install`
+node_modules/
+src/
+bindings/
+binding.gyp
+Cargo.toml
+Makefile
+Package.swift
+pyproject.toml
+setup.py
+package-lock.json
+tree-sitter-embr.wasm

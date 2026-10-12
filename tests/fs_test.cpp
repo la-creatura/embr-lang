@@ -26,6 +26,12 @@ int main() {
           "print(fs_dirname(fs_dirname(p)))\n",
           "c\na\n" },
 
+        // the answers are the ones std::filesystem gave (the first version of this plugin was built on it). these are the odd corners
+        { "fs_join / fs_dirname / fs_basename: repeated separators, a trailing separator, a root",
+          "print(fs_join(\"a//b//\"))\nprint(fs_join(\"a\", \"\"))\nprint(fs_dirname(\"a/b/\"))\nprint(\"[\" + fs_basename(\"a/b/\") + \"]\")\n"
+          "print(fs_dirname(\"//\"))\nprint(\"[\" + fs_dirname(\"a\") + \"]\")\nprint(\"[\" + fs_extname(\"a.b/c\") + \"]\")\n",
+          "a/b/\na/\na/b\n[]\n/\n[]\n[]\n" },
+
         { "fs_join: requires at least one argument",
           "try\nfs_join()\nprint(\"unreachable\")\ncatch e\nprint(\"caught\")\nend\n",
           "caught\n" },

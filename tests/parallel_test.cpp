@@ -62,6 +62,14 @@ int main() {
           "ch = channel()\nchannel_send(ch, 42)\nprint(channel_recv(ch))\n",
           "42\n" },
 
+        { "channel_try_send: a full bounded channel says no instead of waiting, an unbounded one always takes it",
+          "ch = channel(2)\n"
+          "print(channel_try_send(ch, 1))\nprint(channel_try_send(ch, 2))\nprint(channel_try_send(ch, 3))\n"
+          "print(channel_recv(ch))\nprint(channel_try_send(ch, 3))\n"
+          "u = channel()\nprint(channel_try_send(u, 1))\n"
+          "channel_close(ch)\ntry\nchannel_try_send(ch, 9)\ncatch e\nprint(\"closed\")\nend\n",
+          "1\n1\n0\n1\n1\n1\nclosed\n" },
+
         { "channel_try_recv: found flag reflects whether something was queued",
           "ch = channel()\n"
           "r = channel_try_recv(ch)\n"
@@ -244,21 +252,54 @@ int main() {
           "end\n"
           "print(shared_table_get(counter, \"count\"))\n",
           "200\n" },
+
+        // the same boxes are copied and dropped on two threads at once. their counts must be atomic by then (a value is marked
+        // shared when it is sent). run under ThreadSanitizer this fails with a data race if the marking is left out
+        { "channel_send: one value kept by the sender and copied by the worker at the same time keeps its count right",
+          R"EMBR(write_file("test_parallel_rc_worker.embr", "import \"embrlib\"\n\nfn churn(x)\n    i = 0\n    while i < 300\n        y = [x, x]\n        i = i + 1\n    end\n    return len(x)\nend\n")
+)EMBR"
+          "data = [\"alpha\", [\"beta\", \"gamma\"]]\n"
+          "in_ch = channel()\n"
+          "out_ch = channel()\n"
+          "w = worker_spawn(\"test_parallel_rc_worker.embr\", \"churn\", in_ch, out_ch)\n"
+          "n = 300\n"
+          "i = 0\n"
+          "while i < n\n"
+          "  channel_send(in_ch, data)\n"
+          "  j = 0\n"
+          "  while j < 50\n"
+          "    z = [data, data]\n"
+          "    j = j + 1\n"
+          "  end\n"
+          "  i = i + 1\n"
+          "end\n"
+          "channel_close(in_ch)\n"
+          "total = 0\n"
+          "i = 0\n"
+          "while i < n\n"
+          "  r = channel_recv(out_ch)\n"
+          "  total = total + r[\"value\"]\n"
+          "  i = i + 1\n"
+          "end\n"
+          "worker_join(w)\n"
+          "print(total)\n"
+          "print(data[1][1])\n",
+          "600\ngamma\n" },
     };
 
-    embr::Interpreter interp;
-    for (const auto& p : {"parallel", "embrlib", "table"})
-        embr_test::runSourceAny(std::string("import \"") + p + "\"", interp, "");
+    const std::vector<std::string> plugins = {"parallel", "embrlib", "table"};
 
     int passed = 0, failed = 0;
     std::cout << "\n\033[1m parallel plugin test suite \033[0m\n";
     for (const auto& t : tests) {
-        auto r = embr_test::runTest(t, interp);
+        auto interp = embr_test::freshInterpreter(plugins);
+        auto r = embr_test::runTest(t, *interp);
         embr_test::printResult(r);
         r.passed ? ++passed : ++failed;
     }
     for (const auto& t : workerTests) {
-        bool ok = runSuffixTest(t, interp);
+        auto interp = embr_test::freshInterpreter(plugins);
+        bool ok = runSuffixTest(t, *interp);
         ok ? ++passed : ++failed;
     }
 

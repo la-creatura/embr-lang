@@ -100,7 +100,7 @@ private:
                 case TokenType::Break:  case TokenType::Continue:
                 case TokenType::Try:    case TokenType::Catch:
                 case TokenType::Import:
-                case TokenType::Local:  case TokenType::Return: return;
+                case TokenType::Local:  case TokenType::Const: case TokenType::Return: return;
                 default: ++i_;
             }
         }
@@ -108,20 +108,47 @@ private:
 
     TypeSet parseTypeName(const Token& t) {
         TypeSet ts = TypeSet::fromName(t.text);
+        if (t.text == "auto")
+            raiseError("parser", "'auto' was removed: a plain assignment already takes its type from the value, "
+                       "write `local x = 5` (or `local int x = 5` to pick the type yourself)", tr(t), src_);
         if (ts.isNone())
             raiseError("parser", "unknown type '" + t.text +
                        "' expected: num, str, arr, map, fn, ptr, any", tr(t), src_);
         return ts;
     }
+    // a type is a name, and for arr and map an element type in angle brackets: `arr<int>`, `map<arr<str>>`. the closing `>` must not touch an `=`
+    // (`arr<int>= x` lexes as `>=`)
+    TypeSet parseTypeSpec(const Token& nameTok, TypeElem* el) {
+        TypeSet ts = parseTypeName(nameTok);
+        if (!check(TokenType::Less)) return ts;
+        if (ts.mask != TS::Arr.mask && ts.mask != TS::Map.mask)
+            raiseError("parser", "only arr and map take an element type, like arr<int> or map<str>", tr(peek()), src_);
+        ++i_;
+        Token inner = consume(TokenType::Identifier, "expected an element type after '<'");
+        auto ann = std::make_shared<TypeAnn>();
+        ann->t = parseTypeSpec(inner, &ann->el);
+        consume(TokenType::Greater, "expected '>' to close the element type");
+        if (el) *el = ann;
+        return ts;
+    }
+    // an `arr<` or `map<` ahead: a type with an element type, written before a name in `local arr<int> xs = ...`
+    bool genericTypeAhead() {
+        if (!check(TokenType::Identifier) || !checkAt(1, TokenType::Less)) return false;
+        const std::string& n = peek().text;
+        return n == "arr" || n == "array" || n == "map";
+    }
     // name : type
-    TypeSet parseTypeAnnotation() {
+    TypeSet parseTypeAnnotation(bool* written = nullptr, TypeElem* el = nullptr) {
+        if (written) *written = false;
         if (!match(TokenType::Colon)) return TypeSet::Any();
+        if (written) *written = true;
         Token t = consume(TokenType::Identifier, "expected type name after ':'");
-        return parseTypeName(t);
+        return parseTypeSpec(t, el);
     }
 
     // caller already eatid (
-    std::vector<Param> parseParamList() {
+    // `ranges` (if given) gets where each parameter's name is written
+    std::vector<Param> parseParamList(std::vector<SourceRange>* ranges = nullptr) {
         std::vector<Param> params;
         if (!check(TokenType::RParen)) {
             do {
@@ -129,26 +156,36 @@ private:
                 // collects every remaining argument into an array bound to name. must be the last parameter
                 if (match(TokenType::Ellipsis)) {
                     Token nm = consume(TokenType::Identifier, "expected parameter name after '...'");
-                    TypeSet mask = parseTypeAnnotation();
+                    if (ranges) ranges->push_back(tr(nm));
+                    bool written = false;
+                    TypeElem pel;
+                    TypeSet mask = parseTypeAnnotation(&written, &pel);
                     params.push_back(Param::rest(nm.text, mask));
+                    params.back().explicitType = written;
+                    params.back().elem = pel;
                     if (check(TokenType::Comma))
                         raiseError("parser", "variadic parameter '...' must be the last parameter",
                                    tr(peek()), src_);
                     break;
                 }
                 Token nm = consume(TokenType::Identifier, "expected parameter name");
-                TypeSet mask = parseTypeAnnotation();
+                if (ranges) ranges->push_back(tr(nm));
+                bool written = false;
+                TypeElem pel;
+                TypeSet mask = parseTypeAnnotation(&written, &pel);
                 params.push_back(Param::req(nm.text, mask));
+                params.back().explicitType = written;
+                params.back().elem = pel;
             } while (match(TokenType::Comma));
         }
         return params;
     }
 
     // function -> type
-    TypeSet parseReturnAnnotation() {
+    TypeSet parseReturnAnnotation(TypeElem* el = nullptr) {
         if (!match(TokenType::RArrow)) return TypeSet::Any();
         Token t = consume(TokenType::Identifier, "expected return type after '->'");
-        return parseTypeName(t);
+        return parseTypeSpec(t, el);
     }
 
     StmtPtr stmt() {
@@ -162,8 +199,8 @@ private:
         if (match(TokenType::Return))   return parseReturn();
         if (match(TokenType::Import))   return parseImport();
         if (match(TokenType::Local))    return parseLocal();
+        if (match(TokenType::Const))    return parseConst();
         if (match(TokenType::Fn))       return parseFnBlock();
-
         // name(params) = expr
         // IDENT ( [IDENT {, IDENT}] ) = (not ==)
         if (isFnAssignHead()) return parseFnAssign();
@@ -175,6 +212,7 @@ private:
         if (match(TokenType::Equal)) {
             auto rhs = expr();
             auto s = std::make_unique<AssignStmt>();
+            s->range = SourceRange::merge(lhs->range, rhs->range);
             s->target = std::move(lhs); s->value = std::move(rhs);
             return s;
         }
@@ -198,6 +236,7 @@ private:
                     bin->left  = std::make_unique<VarExpr>(v->name, v->range);
                     bin->right = std::move(rhs);
                     auto s = std::make_unique<AssignStmt>();
+                    s->range   = bin->range;
                     s->target  = std::move(lhs);
                     s->value   = std::move(bin);
                     return s;
@@ -271,14 +310,14 @@ private:
     // a, b, c = expr
     StmtPtr parseMultiAssign() {
         SourceRange start = tr(peek());
-        std::vector<std::string> names;
-        names.push_back(consume(TokenType::Identifier, "expected variable name").text);
-        while (match(TokenType::Comma))
-            names.push_back(consume(TokenType::Identifier, "expected variable name").text);
+        auto s = std::make_unique<MultiAssignStmt>();
+        do {
+            Token nm = consume(TokenType::Identifier, "expected variable name");
+            s->names.push_back(nm.text);
+            s->nameRanges.push_back(tr(nm));
+        } while (match(TokenType::Comma));
         consume(TokenType::Equal, "expected '='");
         auto e = expr();
-        auto s = std::make_unique<MultiAssignStmt>();
-        s->names = std::move(names);
         s->range = SourceRange::merge(start, e->range);
         s->value = std::move(e);
         return s;
@@ -291,18 +330,98 @@ private:
         Token nameTok = toks_[i_++];
         SourceRange start = tr(nameTok);
         consume(TokenType::LParen, "expected '('");
-        auto params = parseParamList();
+        std::vector<SourceRange> paramRanges;
+        auto params = parseParamList(&paramRanges);
         consume(TokenType::RParen, "expected ')'");
-        TypeSet retType = parseReturnAnnotation();
+        TypeElem retElem;
+        TypeSet retType = parseReturnAnnotation(&retElem);
         consume(TokenType::Equal,  "expected '='");
         auto bodyExpr = expr();
         // wrap in return stmt
         auto ret   = std::make_unique<ReturnStmt>(); ret->range = bodyExpr->range; ret->value = std::move(bodyExpr);
         auto fn    = std::make_unique<FnStmt>();
-        fn->name   = nameTok.text; fn->params = std::move(params); fn->returnType = retType;
+        fn->name   = nameTok.text; fn->params = std::move(params); fn->returnType = retType; fn->returnElem = retElem;
         fn->body.push_back(std::move(ret));
+        fn->isExprForm = true;
+        fn->nameRange = start; fn->paramRanges = std::move(paramRanges);
         fn->range  = SourceRange::merge(start, fn->body.back()->range);
         return fn;
+    }
+
+    // const name = expr          a value worked out at compile time
+    // const fn name(params) ... end   a function the compiler copies into its calls
+    StmtPtr parseConst() {
+        SourceRange start = tr(prev());
+        if (match(TokenType::Fn)) return parseConstFn(start);
+        Token name = consume(TokenType::Identifier, "expected a name or 'fn' after 'const'");
+        consume(TokenType::Equal, "expected '=' and a value after the name of a const");
+        auto value = expr();
+        auto s = std::make_unique<AssignStmt>();
+        s->target = std::make_unique<VarExpr>(name.text, tr(name));
+        s->range = SourceRange::merge(start, value->range);
+        s->value = std::move(value);
+        s->isConst = true;
+        return s;
+    }
+    StmtPtr parseConstFn(SourceRange start) {
+        auto st = parseFnBlock();
+        auto* fn = static_cast<FnStmt*>(st.get());
+        fn->isTemplate = true;
+        fn->range = SourceRange::merge(start, fn->range);
+        if (!fn->returnType.isAny() || fn->returnElem)
+            raiseError("parser", "a const fn cannot have a return type", fn->range, src_);
+        for (auto& p : fn->params)
+            if (p.optional || p.variadic || p.inout || p.elem)
+                raiseError("parser", "a const fn takes plain parameters: no '...', optional or arr<T> ones", fn->range, src_);
+        if (const char* why = templateProblem(fn->body))
+            raiseError("parser", std::string("a const fn cannot contain ") + why, fn->range, src_);
+        return st;
+    }
+    // what a const fn cannot hold (it is copied into the calls, so no code that keeps its own state): null when the body is fine
+    static const char* templateProblem(const std::vector<StmtPtr>& body) {
+        for (auto& s : body) {
+            switch (s->kind) {
+            case Stmt::Kind::Fn:          return "a nested function";
+            case Stmt::Kind::Try:         return "a try block";
+            case Stmt::Kind::Import:      return "an import";
+            case Stmt::Kind::MultiAssign: return "an assignment to several names";
+            case Stmt::Kind::Local: {
+                auto* l = static_cast<LocalStmt*>(s.get());
+                if (l->targets.size() != 1 || l->bracketed || !l->value) return "a local that unpacks or has no value";
+                if (hasLambdaOrRef(l->value.get())) return "a function value or '&' argument";
+                break;
+            }
+            case Stmt::Kind::Assign: {
+                auto* a = static_cast<AssignStmt*>(s.get());
+                if (a->isConst) return "a const";
+                if (hasLambdaOrRef(a->target.get()) || hasLambdaOrRef(a->value.get())) return "a function value or '&' argument";
+                break;
+            }
+            case Stmt::Kind::Expr:   if (hasLambdaOrRef(static_cast<ExprStmt*>(s.get())->expr.get())) return "a function value or '&' argument"; break;
+            case Stmt::Kind::Return: { auto* r = static_cast<ReturnStmt*>(s.get()); if (r->value && hasLambdaOrRef(r->value.get())) return "a function value or '&' argument"; break; }
+            case Stmt::Kind::If: {
+                auto* i = static_cast<IfStmt*>(s.get());
+                if (hasLambdaOrRef(i->cond.get())) return "a function value or '&' argument";
+                if (auto* w = templateProblem(i->thenBlock)) return w;
+                if (auto* w = templateProblem(i->elseBlock)) return w;
+                break;
+            }
+            case Stmt::Kind::While: {
+                auto* w = static_cast<WhileStmt*>(s.get());
+                if (hasLambdaOrRef(w->cond.get())) return "a function value or '&' argument";
+                if (auto* p = templateProblem(w->body)) return p;
+                break;
+            }
+            case Stmt::Kind::For: {
+                auto* f = static_cast<ForStmt*>(s.get());
+                if (hasLambdaOrRef(f->iterable.get())) return "a function value or '&' argument";
+                if (auto* p = templateProblem(f->body)) return p;
+                break;
+            }
+            default: break;
+            }
+        }
+        return nullptr;
     }
 
     // fn name(params) body end
@@ -310,67 +429,68 @@ private:
         SourceRange start = tr(prev());
         Token name = consume(TokenType::Identifier, "expected function name after 'fn'");
         consume(TokenType::LParen, "expected '('");
-        auto params = parseParamList();
+        std::vector<SourceRange> paramRanges;
+        auto params = parseParamList(&paramRanges);
         consume(TokenType::RParen, "expected ')'");
-        TypeSet retType = parseReturnAnnotation();
+        TypeElem retElem;
+        TypeSet retType = parseReturnAnnotation(&retElem);
         std::vector<StmtPtr> body;
         int savedLoopDepth = loopDepth_; loopDepth_ = 0; // break/continue can't cross a fn boundary
         while (!check(TokenType::End) && !check(TokenType::Eof)) body.push_back(stmt());
         loopDepth_ = savedLoopDepth;
         Token endTok = consume(TokenType::End, "expected 'end' to close 'fn'");
         auto fn = std::make_unique<FnStmt>();
-        fn->name = name.text; fn->params = std::move(params); fn->returnType = retType;
+        fn->name = name.text; fn->params = std::move(params); fn->returnType = retType; fn->returnElem = retElem;
         fn->body = std::move(body);
+        fn->nameRange = tr(name); fn->paramRanges = std::move(paramRanges);
         fn->range = SourceRange::merge(start, tr(endTok));
         return fn;
     }
 
-    // one target in a local declaration list [type|auto] name
+    // one target in a local declaration list [type] name
     // IDENT with another IDENT means the first is type and second is the variable (local int x)
     // IDENT with no other IDENT is just the variable name untyped
     DestructureTarget parseDestructureTarget() {
         DestructureTarget t;
-        if (match(TokenType::Auto)) {
-            t.isAuto = true;
-            t.name = consume(TokenType::Identifier, "expected variable name after 'auto'").text;
-            return t;
-        }
-        if (check(TokenType::Identifier) && checkAt(1, TokenType::Identifier)) {
+        if ((check(TokenType::Identifier) && checkAt(1, TokenType::Identifier)) || genericTypeAhead()) {
             Token typeTok = toks_[i_++];
-            t.type = parseTypeName(typeTok);
+            t.type = parseTypeSpec(typeTok, &t.elem);
+            t.explicitType = true;
         }
-        t.name = consume(TokenType::Identifier, "expected variable name").text;
+        Token nm = consume(TokenType::Identifier, "expected variable name");
+        t.name = nm.text;
+        t.range = tr(nm);
         return t;
     }
 
     // local [type] name = expr
     // local [type] name1, [type] name2, ... = expr
-    // local [type|auto] [name1, name2, ...] = expr
+    // local [type] [name1, name2, ...] = expr
     StmtPtr parseLocal() {
         SourceRange start = tr(prev());
         auto s = std::make_unique<LocalStmt>();
 
         bool bracketNext =
             check(TokenType::LBracket) ||
-            (check(TokenType::Auto)       && checkAt(1, TokenType::LBracket)) ||
             (check(TokenType::Identifier) && checkAt(1, TokenType::LBracket));
 
         if (bracketNext) {
             s->bracketed = true;
-            bool     sharedAuto = false;
             TypeSet  sharedType = TypeSet::Any();
-            if (match(TokenType::Auto)) {
-                sharedAuto = true;
-            } else if (check(TokenType::Identifier)) {
+            bool     sharedExplicit = false;
+            if (check(TokenType::Identifier)) {
                 Token typeTok = toks_[i_++];
                 sharedType = parseTypeName(typeTok);
+                sharedExplicit = true;
             }
             consume(TokenType::LBracket, "expected '['");
             do {
                 DestructureTarget t;
-                t.name   = consume(TokenType::Identifier, "expected variable name").text;
-                t.isAuto = sharedAuto;
+                Token nm = consume(TokenType::Identifier, "expected variable name");
+                t.name   = nm.text;
+                t.range  = tr(nm);
                 t.type   = sharedType;
+                t.explicitType = sharedExplicit;
                 s->targets.push_back(std::move(t));
             } while (match(TokenType::Comma));
             consume(TokenType::RBracket, "expected ']'");
@@ -451,12 +571,13 @@ private:
         SourceRange start = tr(prev());
         Token first = consume(TokenType::Identifier, "expected loop variable after 'for'");
         std::string keyName, varName;
+        SourceRange keyRange, varRange;
         if (match(TokenType::Comma)) {
             Token second = consume(TokenType::Identifier, "expected second loop variable after ','");
-            keyName = first.text;
-            varName = second.text;
+            keyName = first.text;  keyRange = tr(first);
+            varName = second.text; varRange = tr(second);
         } else {
-            varName = first.text;
+            varName = first.text;  varRange = tr(first);
         }
         consume(TokenType::In, "expected 'in' after for-loop variable(s)");
         auto iter = expr();
@@ -467,6 +588,7 @@ private:
         Token endTok = consume(TokenType::End, "expected 'end' to close 'for'");
         auto s = std::make_unique<ForStmt>();
         s->keyName = std::move(keyName); s->varName = std::move(varName);
+        s->keyRange = keyRange; s->varRange = varRange;
         s->iterable = std::move(iter); s->body = std::move(body);
         s->range = SourceRange::merge(start, tr(endTok));
         return s;
@@ -485,6 +607,7 @@ private:
         auto s = std::make_unique<TryStmt>();
         s->tryBlock = std::move(tryBlock);
         s->catchVar = var.text;
+        s->catchRange = tr(var);
         s->catchBlock = std::move(catchBlock);
         s->range = SourceRange::merge(start, tr(endTok));
         return s;
@@ -548,9 +671,13 @@ private:
                 continue;
             }
 
-            int prec = infixPrec(peek().type);
+            // `>>` is two `>` tokens (the lexer cannot make it one: `arr<arr<int>>` closes two types). a `>` right after a
+            // `>` in an operator position can't be anything else, as no expression starts with `>`
+            const bool shiftRight = check(TokenType::Greater) && checkAt(1, TokenType::Greater);
+            int prec = shiftRight ? kShiftPrec : infixPrec(peek().type);
             if (prec < minPrec) break;
             Token op = toks_[i_++];
+            if (shiftRight) { ++i_; op.text = ">>"; }
             auto bin  = std::make_unique<BinaryExpr>();
             bin->op   = op.text;
             bin->left = std::move(left);
@@ -579,7 +706,7 @@ private:
 
     ExprPtr unary() {
         NestGuard guard(*this);
-        if (match(TokenType::Minus) || match(TokenType::Bang)) {
+        if (match(TokenType::Minus) || match(TokenType::Bang) || match(TokenType::Tilde)) {
             Token op = prev(); auto right = unary();
             auto u = std::make_unique<UnaryExpr>();
             u->op = op.text; u->right = std::move(right);
@@ -670,9 +797,23 @@ private:
             }
             case TokenType::LBracket: {
                 auto arr = std::make_unique<ArrayExpr>();
-                if (!check(TokenType::RBracket))
-                    do { arr->elements.push_back(expr()); }
-                    while (match(TokenType::Comma) && !check(TokenType::RBracket));
+                if (!check(TokenType::RBracket)) {
+                    arr->elements.push_back(expr());
+                    if (match(TokenType::Ellipsis)) {                         // [a...b]
+                        arr->elements.push_back(expr());
+                        arr->isRange = true;
+                    } else {
+                        while (match(TokenType::Comma) && !check(TokenType::RBracket)) {
+                            arr->elements.push_back(expr());
+                            // [a, b...c]: the second element followed by the dots is a range with a step
+                            if (arr->elements.size() == 2 && match(TokenType::Ellipsis)) {
+                                arr->elements.push_back(expr());
+                                arr->isRange = true;
+                                break;
+                            }
+                        }
+                    }
+                }
                 Token rb = consume(TokenType::RBracket, "expected ']'");
                 arr->range = SourceRange::merge(r, tr(rb));
                 { int d = 0; for (auto& el : arr->elements) d = std::max(d, el->depth);
@@ -707,12 +848,16 @@ private:
             // fn(params) body end
             case TokenType::Fn: {
                 consume(TokenType::LParen, "expected '(' after 'fn'");
-                auto params = parseParamList();
+                std::vector<SourceRange> paramRanges;
+                auto params = parseParamList(&paramRanges);
                 consume(TokenType::RParen, "expected ')'");
-                TypeSet retType = parseReturnAnnotation();
+                TypeElem retElem;
+                TypeSet retType = parseReturnAnnotation(&retElem);
                 auto lam = std::make_unique<LambdaExpr>();
                 lam->params = std::move(params);
+                lam->paramRanges = std::move(paramRanges);
                 lam->returnType = retType;
+                lam->returnElem = retElem;
                 int savedLoopDepth = loopDepth_; loopDepth_ = 0; // break/continue can't cross a fn boundary
                 while (!check(TokenType::End) && !check(TokenType::Eof))
                     lam->ownedBody.push_back(stmt());
@@ -730,14 +875,21 @@ private:
         }
     }
 
+    // binary operator levels, low to high: comparison, `|`, `^`, `&`, shifts, `+ -`, `* / %`. the bit operators bind tighter
+    // than a comparison (as in Python, not C), so `x & 1 == 0` is `(x & 1) == 0`
+    static constexpr int kShiftPrec = 6;
     int infixPrec(TokenType t) const {
         switch (t) {
             case TokenType::EqualEqual:   case TokenType::BangEqual:
             case TokenType::Greater:      case TokenType::Less:
             case TokenType::GreaterEqual: case TokenType::LessEqual: return 2;
-            case TokenType::Plus:         case TokenType::Minus:     return 3;
+            case TokenType::Pipe:                                    return 3;
+            case TokenType::Caret:                                   return 4;
+            case TokenType::Amp:                                     return 5;
+            case TokenType::LShift:                                  return kShiftPrec;
+            case TokenType::Plus:         case TokenType::Minus:     return 7;
             case TokenType::Star:         case TokenType::Slash:
-            case TokenType::Percent:                                 return 4;
+            case TokenType::Percent:                                 return 8;
 
             default: return -1;
         }

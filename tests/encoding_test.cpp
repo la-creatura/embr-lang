@@ -1,4 +1,4 @@
-// unit tests for plugins/encoding/encoding.cpp -- known-answer vectors (RFC 4648, FIPS 180, zlib crc32)
+// unit tests for plugins/encoding/encoding.c -- known-answer vectors (RFC 4648, FIPS 180, zlib crc32)
 
 #include "harness.h"
 

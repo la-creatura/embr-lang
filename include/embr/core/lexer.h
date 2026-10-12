@@ -13,6 +13,21 @@
 
 namespace embr {
 
+// every keyword and its token. the language server's completion lists these too
+inline const std::unordered_map<std::string, TokenType>& keywordTable() {
+    static const std::unordered_map<std::string, TokenType> kw = {
+        {"if",TokenType::If},        {"elif",TokenType::Elif},    {"else",TokenType::Else},
+        {"end",TokenType::End},
+        {"fn",TokenType::Fn},        {"return",TokenType::Return},{"while",TokenType::While},
+        {"for",TokenType::For},      {"in",TokenType::In},
+        {"break",TokenType::Break},  {"continue",TokenType::Continue},
+        {"import",TokenType::Import},{"local",TokenType::Local},{"const",TokenType::Const},
+        {"and",TokenType::And},      {"or",TokenType::Or},
+        {"try",TokenType::Try},      {"catch",TokenType::Catch},
+    };
+    return kw;
+}
+
 class Lexer {
 public:
     explicit Lexer(const std::string& src) : s_(src), map_(src) {}
@@ -73,16 +88,7 @@ private:
     Token lexIdent() {
         int sl = line_, sc = col_; std::string t;
         while (!eof() && (std::isalnum((unsigned char)peek()) || peek() == '_')) t += get();
-        static const std::unordered_map<std::string, TokenType> kw = {
-            {"if",TokenType::If},        {"elif",TokenType::Elif},    {"else",TokenType::Else},
-            {"end",TokenType::End},
-            {"fn",TokenType::Fn},        {"return",TokenType::Return},{"while",TokenType::While},
-            {"for",TokenType::For},      {"in",TokenType::In},
-            {"break",TokenType::Break},  {"continue",TokenType::Continue},
-            {"import",TokenType::Import},{"local",TokenType::Local},{"auto",TokenType::Auto},
-            {"and",TokenType::And},      {"or",TokenType::Or},
-            {"try",TokenType::Try},      {"catch",TokenType::Catch},
-        };
+        const auto& kw = keywordTable();
         auto it = kw.find(t);
         return {it != kw.end() ? it->second : TokenType::Identifier, t, sl, sc};
     }
@@ -91,6 +97,7 @@ private:
         int sl = line_, sc = col_; std::string t; bool dot = false;
         while (!eof() && (std::isdigit(peek()) || peek() == '.')) {
             if (peek() == '.') {
+                if (pos_ + 1 < s_.size() && s_[pos_ + 1] == '.') break;   // `0...10`: the dots are the range's, not a decimal point
                 if (dot) raiseError("lexer","multiple decimal points",{sl,sc,line_,col_},map_);
                 dot = true;
             }
@@ -208,8 +215,12 @@ private:
 
             case '=': if(peek()=='='){get();return{TokenType::EqualEqual,  "==",sl,sc};} return{TokenType::Equal,  "=",sl,sc};
             case '>': if(peek()=='='){get();return{TokenType::GreaterEqual,">=",sl,sc};} return{TokenType::Greater,">",sl,sc};
-            case '<': if(peek()=='='){get();return{TokenType::LessEqual,   "<=",sl,sc};} return{TokenType::Less,   "<",sl,sc};
+            case '<': if(peek()=='='){get();return{TokenType::LessEqual,   "<=",sl,sc};}
+                      if(peek()=='<'){get();return{TokenType::LShift,      "<<",sl,sc};} return{TokenType::Less,   "<",sl,sc};
             case '&': return {TokenType::Amp, "&", sl, sc};
+            case '|': return {TokenType::Pipe, "|", sl, sc};
+            case '^': return {TokenType::Caret, "^", sl, sc};
+            case '~': return {TokenType::Tilde, "~", sl, sc};
             case '!': if(peek()=='='){get();return{TokenType::BangEqual,   "!=",sl,sc};} return{TokenType::Bang,   "!",sl,sc};
 
         }

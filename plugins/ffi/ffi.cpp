@@ -63,6 +63,7 @@ struct FFIState {
         void*                    fnptr = nullptr;
         std::string              name;
         std::weak_ptr<LibHandle> lib;
+        bool                     raw = false;   // from ffi_fn(): no library to check, the caller vouches for the address
     };
 
     // a C-callable trampoline made by ffi_callback(). C code may keep the raw executable pointer without any embr Value
@@ -87,7 +88,7 @@ static const TypeDesc g_voidDesc = embrtypes::kindOnly(TypeDesc::Kind::Void);
 
 // a TypeDesc argument plus whatever keeps it alive. requireDesc() returns a raw pointer into the Value's TypedPtr
 // payload, fine for one ffi_call/ffi_callback invocation. ffi_prepare/ffi_callback store the descriptor for
-// reuse, so they also hold the shared_ptr the Value's TypedPtr held (from asPointer().owner). nil (void) has no
+// reuse, so they also hold the shared_ptr the Value's TypedPtr held (from asPointer().owner()). nil (void) has no
 // owner, g_voidDesc is static
 struct DescRef {
     const TypeDesc*                    ptr = &g_voidDesc;
@@ -96,7 +97,7 @@ struct DescRef {
 static DescRef resolveDescArg(const Value& v, const std::string& caller, const std::string& argname) {
     if (embrtypes::isNil(v)) return {};
     const TypeDesc* raw = embrtypes::requireDesc(v, caller, argname);
-    return DescRef{raw, std::static_pointer_cast<const TypeDesc>(v.asPointer().owner)};
+    return DescRef{raw, std::static_pointer_cast<const TypeDesc>(v.asPointer().owner())};
 }
 
 // libffi needs a stable-address ffi_type (and elements[] array) for as long as a cif uses it. for a struct from
@@ -311,21 +312,7 @@ static void marshalArg(const std::string&     context,
     // integer. prefer an already-exact int64 (e.g. from an int literal or a
     // prior ffi_call's int-typed return) over a double round-trip so large
     // 64-bit values don't lose precision on the way in.
-    if (!val.isNumeric())
-        raiseError(context, argLabel + ": expects " + tname + ", got " + val.typeName());
-    int64_t iv;
-    if (val.isInt()) {
-        iv = val.asInt();
-    } else {
-        double x = val.asNumber();
-        iv = doubleToInt64(x, context, argLabel);
-        if ((double)iv != x)
-            raiseError(context, argLabel + ": type " + tname +
-                       " is integer but got non-integer value " + std::to_string(x));
-    }
-    if (!w.isSigned && iv < 0)
-        raiseError(context, argLabel + ": type " + tname +
-                   " is unsigned but got negative value");
+    const int64_t iv = embrtypes::intForWidth(val, w, tname, context, argLabel);
     switch (w.size) {
         case 1: { uint8_t  v=(uint8_t) iv; memcpy(slot,&v,1); } break;
         case 2: { uint16_t v=(uint16_t)iv; memcpy(slot,&v,2); } break;
@@ -432,9 +419,7 @@ static void writeValueToMemory(const std::string& context, void* p,
         if (w.size == 4) { float f = (float)x; memcpy(p, &f, 4); }
         else              {                     memcpy(p, &x, 8); }
     } else {
-        if (!v.isNumeric())
-            raiseError(context, "value must be a number for integer type");
-        int64_t iv = v.isInt() ? v.asInt() : doubleToInt64(v.asNumber(), context, "value");
+        const int64_t iv = embrtypes::intForWidth(v, w, embrtypes::describe(d), context, "value");
         switch (w.size) {
             case 1: { uint8_t  x=(uint8_t) iv; memcpy(p,&x,1); } break;
             case 2: { uint16_t x=(uint16_t)iv; memcpy(p,&x,2); } break;
@@ -473,6 +458,7 @@ struct FFIState::PreparedCall {
     DescRef                retDesc;
     std::string            symName;   // for error messages
     std::weak_ptr<FFIState::LibHandle> lib;  // validated live at ffi_invoke() time
+    bool                   raw = false;       // made from ffi_fn(): nothing to validate
 };
 
 // out of line: libs (shared_ptr<LibHandle>) and callbacks (unique_ptr<CallbackEntry>)
@@ -507,7 +493,9 @@ static void trampolineBody(FFIState::CallbackEntry* entry, void* retbuf, void** 
         return;
     }
     // integer. write into an ffi_arg slot. libffi reads the right width.
-    int64_t iv = doubleToInt64(result.asNumber(), "ffi_callback", "return value");
+    int64_t iv = embrtypes::fixedWidth(retInfo.kind, w)
+        ? embrtypes::intForWidth(result, w, embrtypes::describe(retInfo), "ffi_callback", "return value")
+        : doubleToInt64(result.asNumber(), "ffi_callback", "return value");
     memcpy(retbuf, &iv, sizeof(iv));
 }
 
@@ -616,6 +604,20 @@ EMBR_PLUGIN {
             FFIState::SymHandle{sym, name, lib});
     });
 
+    // ffi_fn(address: ptr, name?: str) -> ptr<ffi.sym>
+    // wraps a function address that did not come from ffi_sym (the result of glXGetProcAddress or raylib's rlGetProcAddress,
+    // or a function pointer read from a struct). nothing checks it: a bad address crashes the process, and the address must
+    // stay valid for as long as the symbol is used
+    interp->bindSig("ffi_fn", {pPtr("address"), pOpt("name", TS::Str)},
+    [](const std::vector<Value>& args) -> Value {
+        void* fn = args[0].asPointer().ptr;
+        if (!fn) raiseError("ffi_fn", "the address is null");
+        std::string name = args.size() > 1 ? args[1].asString() : "function pointer";
+        FFIState::SymHandle h{fn, name, {}};
+        h.raw = true;
+        return Value::makeUserdata<FFIState::SymHandle>("ffi.sym", std::move(h));
+    });
+
     // ffi_call(sym: ptr<ffi.sym>, ret: desc|nil, arg_types: arr of desc, args: arr) -> any
     //
     // marshals args, builds a libffi CIF, calls the function, and unmarshals the return value
@@ -627,7 +629,7 @@ EMBR_PLUGIN {
         {pPtr("sym"), pAny("ret"), pArr("arg_types"), pArr("args")},
     [ffi](const std::vector<Value>& args) -> Value {
         auto* sym = args[0].userdata<FFIState::SymHandle>("ffi.sym");
-        if (sym->lib.expired())
+        if (!sym->raw && sym->lib.expired())
             raiseError("ffi_call", "the symbol's library has been closed");
 
         const auto& argTypeVals = args[2].asArray();
@@ -678,13 +680,14 @@ EMBR_PLUGIN {
         {pPtr("sym"), pAny("ret"), pArr("arg_types")},
     [ffi](const std::vector<Value>& args) -> Value {
         auto* sym = args[0].userdata<FFIState::SymHandle>("ffi.sym");
-        if (sym->lib.expired())
+        if (!sym->raw && sym->lib.expired())
             raiseError("ffi_prepare", "the symbol's library has been closed");
 
         auto prep = std::make_shared<FFIState::PreparedCall>();
         prep->fnptr   = sym->fnptr;
         prep->symName = sym->name;
         prep->lib     = sym->lib;
+        prep->raw     = sym->raw;
 
         const auto& argTypeVals = args[2].asArray();
         size_t nargs = argTypeVals.size();
@@ -721,7 +724,7 @@ EMBR_PLUGIN {
     interp->bindSig("ffi_invoke", {pPtr("prepared"), pArr("args")},
     [](const std::vector<Value>& args) -> Value {
         auto* prep = args[0].userdata<FFIState::PreparedCall>("ffi.prepared");
-        if (prep->lib.expired())
+        if (!prep->raw && prep->lib.expired())
             raiseError("ffi_invoke", "prepared call '" + prep->symName +
                        "': the symbol's library has been closed");
 
@@ -877,7 +880,7 @@ EMBR_PLUGIN {
         {pPtr("sym"), pAny("ret"), pArr("arg_types"), pArr("args"), pNum("nfixed")},
     [](const std::vector<Value>& args) -> Value {
         auto* sym = args[0].userdata<FFIState::SymHandle>("ffi.sym");
-        if (sym->lib.expired())
+        if (!sym->raw && sym->lib.expired())
             raiseError("ffi_call_var", "the symbol's library has been closed");
 
         const auto& argTypeVals = args[2].asArray();
@@ -923,7 +926,7 @@ EMBR_PLUGIN {
         {pPtr("sym"), pAny("ret"), pArr("arg_types"), pNum("nfixed")},
     [](const std::vector<Value>& args) -> Value {
         auto* sym = args[0].userdata<FFIState::SymHandle>("ffi.sym");
-        if (sym->lib.expired())
+        if (!sym->raw && sym->lib.expired())
             raiseError("ffi_prepare_var", "the symbol's library has been closed");
 
         const auto& argTypeVals = args[2].asArray();
@@ -937,6 +940,7 @@ EMBR_PLUGIN {
         prep->fnptr   = sym->fnptr;
         prep->symName = sym->name;
         prep->lib     = sym->lib;
+        prep->raw     = sym->raw;
 
         prep->argDescs.resize(nargs);
         prep->argFFITypes.resize(nargs);
@@ -959,3 +963,21 @@ EMBR_PLUGIN {
         return Value(TypedPtr(prep.get(), "ffi.prepared", prep));
     });
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("ffi", "1.0.0", "libffi-based foreign function interface", EMBR_CAP_NATIVE, EMBR_CAP_NONE,
+    {"ffi_call", "one-shot: rebuilds the cif on every call, fine for a single call, wasteful in a loop"},
+    {"ffi_call_var", "variadic version. uses ffi_prep_cif_var, which the ABI needs (x86-64 SysV, for one, counts vector registers in %al)"},
+    {"ffi_callback", "makes a real executable C function pointer that calls back into fn. not refcounted: it lives until ffi_callback_free"},
+    {"ffi_callback_free", "raises if already freed"},
+    {"ffi_close", "closes right away (not deferred to the gc), raises if already closed"},
+    {"ffi_invoke", "fast path for a prepared call"},
+    {"ffi_fn", "wraps a function address that did not come from ffi_sym (a GetProcAddress result, a function pointer in a struct). nothing checks the address"},
+    {"ffi_open", "dlopen, raises with the platform's own dlerror text"},
+    {"ffi_prepare", "resolves the types and runs ffi_prep_cif once, then caches it"},
+    {"ffi_prepare_var", "cached variadic prepare. only valid for calls with exactly this total argument count, because libffi bakes the total count into the cif"},
+    {"ffi_sym", "holds only a weak reference to the lib handle, so it raises cleanly (no undefined behavior) if the library was closed first"},
+    {"ptr_null", "canonical null pointer (no pointer literal syntax in embr)"},
+    {"ptr_offset", "pointer displaced by n bytes"},
+    {"ptr_read", "raise on a null pointer; struct descriptors expect/produce a field-name-keyed map"},
+    {"ptr_write", "raise on a null pointer; struct descriptors expect/produce a field-name-keyed map"});

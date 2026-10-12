@@ -1,5 +1,5 @@
 # requires: vm
-# cooperative coroutines (only available when running under `embr --vm`)
+# cooperative coroutines (only the vm backend can run them)
 import "coroutine"
 
 fn counter(start)

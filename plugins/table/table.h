@@ -54,7 +54,7 @@ using TableData = std::unordered_map<TableKey, std::pair<Value, Value>, TableKey
     raiseError("[table:" + fn + "]", msg);
 }
 
-inline TableKey makeKey(const std::string& fn, const Value& v) {
+inline TableKey makeKey(const char* fn, const Value& v) {
     if (v.isNumeric()) {
         double d = v.asNumber();
         if (std::isnan(d)) throwTableError(fn, "table index is NaN");

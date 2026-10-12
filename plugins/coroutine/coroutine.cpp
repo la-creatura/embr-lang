@@ -23,8 +23,8 @@
 //   print(coroutine_status(co))       # "suspended"
 //
 // good to know
-//   - VM only. a coroutine body must be a function the VM compiled, so the script has to run with `--vm`.
-//     the plugin still imports on other builds, and every coroutine_* call then raises a clear error
+//   - VM only. a coroutine body must be a function the VM compiled, so a backend added later would not run
+//     coroutines until it can pause and resume the same way
 //   - one value in and one value out per resume/yield (not Lua's multiple values), on purpose
 //   - coroutine_yield() pauses with VmRunner::suspend() instead of inject()+YIELD. it is simpler and doesn't touch injBuf_
 //   - how values travel: coroutine_yield(v) stores v on the Coroutine and returns a placeholder (a native must
@@ -42,11 +42,6 @@ using namespace embr;
     raiseError("[coroutine:" + fn + "]", msg);
 }
 
-#ifdef EMBR_WITH_VM
-
-// only used below, inside this same #ifdef, the !EMBR_WITH_VM fallback
-// registrations use bind() (no signature) rather than bindSig(), so these
-// would be unused (and warn as such) outside this guard.
 static Param pPtr(std::string n) { return Param::req(std::move(n), TS::Ptr); }
 static Param pFn (std::string n) { return Param::req(std::move(n), TS::Fn); }
 
@@ -82,23 +77,17 @@ static const char* stateName(Coroutine::State s) {
     return "dead";
 }
 
-#endif // EMBR_WITH_VM
-
 EMBR_PLUGIN {
 
-#ifdef EMBR_WITH_VM
-
     // coroutine_create(fn) -> ptr<coroutine.handle>
-    // fn must be a script function compiled by the VM (i.e. this script is
-    // running under `--vm`) -- raises otherwise. does not start running fn;
+    // fn must be a script function compiled by the VM, raises otherwise. does not start running fn;
     // its body only begins executing on the first coroutine_resume().
     interp->bindSig("coroutine_create", {pFn("fn")},
     [interp](const std::vector<Value>& args) -> Value {
         const auto& c = args[0].asCallable();
         if (!c.isScript() || !c.script.compiledChunk)
             throwError("coroutine_create",
-                       "coroutine body must be a script function compiled by the VM backend "
-                       "(run embr with --vm)");
+                       "coroutine body must be a script function compiled by the VM backend");
         return Value::makeUserdata<Coroutine>("coroutine.handle", *interp, args[0]);
     });
 
@@ -165,17 +154,11 @@ EMBR_PLUGIN {
     [](const std::vector<Value>& args) -> Value {
         return Value(std::string(stateName(requireCoroutine(args[0])->state)));
     });
-
-#else // !EMBR_WITH_VM
-
-    static const auto notBuiltWithVm = [](const std::vector<Value>&) -> Value {
-        throwError("coroutine", "the coroutine plugin requires embr to be built with "
-                                 "-DEMBR_WITH_VM=ON (this build only has the tree-walker backend)");
-    };
-    interp->bind("coroutine_create",  notBuiltWithVm);
-    interp->bind("coroutine_resume",  notBuiltWithVm);
-    interp->bind("coroutine_yield",   notBuiltWithVm);
-    interp->bind("coroutine_status",  notBuiltWithVm);
-
-#endif
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("coroutine", "1.0.0", "cooperative coroutines (VM backend only)", EMBR_CAP_NONE, EMBR_CAP_NONE,
+    {"coroutine_create", "does not start fn; raises unless fn is VM-compiled"},
+    {"coroutine_resume", "first call: value becomes the body's single argument; later calls: value is what the pending coroutine_yield returns. Returns the next yielded value, or the body's return value when it finishes. Raises if co is dead or already running (resuming from inside itself)"},
+    {"coroutine_status", "\"suspended\", \"running\" or \"dead\""},
+    {"coroutine_yield", "suspends the innermost running coroutine; raises outside any coroutine"});

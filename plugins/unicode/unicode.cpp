@@ -26,7 +26,6 @@
 
 using namespace embr;
 
-static Param pStr(std::string n) { return Param::req(std::move(n), TS::Str); }
 static Param pNum(std::string n) { return Param::req(std::move(n), TS::Num); }
 
 static void throwError(const std::string& fn, const std::string& msg) {
@@ -85,15 +84,14 @@ static std::string encodeOne(uint32_t cp) {
     return out;
 }
 
-Value unicode_ord(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
+int64_t unicode_ord(const std::string& s) {
     if (s.empty()) throwError("ord", "empty string");
     Decoded d = decodeOne(s, 0);
     if (!d.valid) throwError("ord", "invalid UTF-8 at byte 0");
-    return Value((double)d.codepoint);
+    return (int64_t)d.codepoint;
 }
 
-Value unicode_chr(const std::vector<Value>& args) {
+Value unicode_chr(const ArgSpan& args) {
     if (!args[0].isNumeric()) throwError("chr", "argument must be a number");
     int64_t code = numToInt64(args[0], "chr", "argument");
     if (code < 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
@@ -101,8 +99,7 @@ Value unicode_chr(const std::vector<Value>& args) {
     return Value(encodeOne((uint32_t)code));
 }
 
-Value unicode_len(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
+int64_t unicode_len(const std::string& s) {
     size_t count = 0, pos = 0;
     while (pos < s.size()) {
         Decoded d = decodeOne(s, pos);
@@ -110,22 +107,20 @@ Value unicode_len(const std::vector<Value>& args) {
         ++count;
         pos += d.len;
     }
-    return Value((double)count);
+    return (int64_t)count;
 }
 
-Value unicode_valid(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
+bool unicode_valid(const std::string& s) {
     size_t pos = 0;
     while (pos < s.size()) {
         Decoded d = decodeOne(s, pos);
-        if (!d.valid) return Value(0.0);
+        if (!d.valid) return false;
         pos += d.len;
     }
-    return Value(1.0);
+    return true;
 }
 
-Value unicode_chars(const std::vector<Value>& args) {
-    const std::string& s = args[0].asString();
+Value unicode_chars(const std::string& s) {
     std::vector<Value> result;
     size_t pos = 0;
     while (pos < s.size()) {
@@ -139,32 +134,55 @@ Value unicode_chars(const std::vector<Value>& args) {
 
 // applies a per-codepoint iswXXX classifier across the whole string;
 // true only if the string is non-empty, valid UTF-8, and every codepoint matches
-static Value classifyAll(const std::string& fn, const std::vector<Value>& args, int (*classify)(std::wint_t)) {
-    const std::string& s = args[0].asString();
-    if (s.empty()) return Value(0.0);
+static bool classifyAll(const char* fn, const std::string& s, int (*classify)(std::wint_t)) {
+    if (s.empty()) return false;
     size_t pos = 0;
     while (pos < s.size()) {
         Decoded d = decodeOne(s, pos);
         if (!d.valid) throwError(fn, "invalid UTF-8 at byte " + std::to_string(pos));
-        if (!classify((std::wint_t)d.codepoint)) return Value(0.0);
+        if (!classify((std::wint_t)d.codepoint)) return false;
         pos += d.len;
     }
-    return Value(1.0);
+    return true;
 }
 
-Value unicode_isalpha(const std::vector<Value>& args) { return classifyAll("isalpha", args, std::iswalpha); }
-Value unicode_isdigit(const std::vector<Value>& args) { return classifyAll("isdigit", args, std::iswdigit); }
-Value unicode_isalnum(const std::vector<Value>& args) { return classifyAll("isalnum", args, std::iswalnum); }
+bool unicode_isalpha(const std::string& s) { return classifyAll("isalpha", s, std::iswalpha); }
+bool unicode_isdigit(const std::string& s) { return classifyAll("isdigit", s, std::iswdigit); }
+bool unicode_isalnum(const std::string& s) { return classifyAll("isalnum", s, std::iswalnum); }
 
 EMBR_PLUGIN {
     std::setlocale(LC_CTYPE, "");
 
-    interp->bindSig("unicode_ord",     {pStr("char")},   unicode_ord);
-    interp->bindSig("unicode_chr",     {pNum("code")},   unicode_chr);
-    interp->bindSig("unicode_len",     {pStr("string")}, unicode_len);
-    interp->bindSig("unicode_valid",   {pStr("string")}, unicode_valid);
-    interp->bindSig("unicode_chars",   {pStr("string")}, unicode_chars);
-    interp->bindSig("unicode_isalpha", {pStr("string")}, unicode_isalpha);
-    interp->bindSig("unicode_isdigit", {pStr("string")}, unicode_isdigit);
-    interp->bindSig("unicode_isalnum", {pStr("string")}, unicode_isalnum);
+    interp->bindTyped("unicode_ord", {"char"}, unicode_ord);
+    interp->bindSpan("unicode_chr",     {pNum("code")},   unicode_chr);
+    interp->bindTyped("unicode_len", {"string"}, unicode_len);
+    interp->bindTyped("unicode_valid", {"string"}, unicode_valid);
+    interp->bindTyped("unicode_chars", {"string"}, unicode_chars);
+    interp->bindTyped("unicode_isalpha", {"string"}, unicode_isalpha);
+    interp->bindTyped("unicode_isdigit", {"string"}, unicode_isdigit);
+    interp->bindTyped("unicode_isalnum", {"string"}, unicode_isalnum);
+
+    // what each always returns (see Value::Callable::returns)
+    interp->setResultTypes({
+        {"unicode_ord", TS::Int}, {"unicode_chr", TS::Str}, {"unicode_len", TS::Int}, {"unicode_valid", TS::Int},
+        {"unicode_chars", TS::Arr}, {"unicode_isalpha", TS::Int}, {"unicode_isdigit", TS::Int}, {"unicode_isalnum", TS::Int},
+    });
+
+    // the same answer for the same arguments and no side effects, so a const may call them while compiling
+    interp->setPure({
+        "unicode_ord", "unicode_chr", "unicode_len", "unicode_valid", "unicode_chars", "unicode_isalpha",
+        "unicode_isdigit", "unicode_isalnum",
+    });
+    interp->setResultElems({{"unicode_chars", TS::Str}});
 }
+
+// what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
+EMBR_PLUGIN_INFO("unicode", "1.0.0", "UTF-8 aware length, code points and character classes", EMBR_CAP_NONE, EMBR_CAP_NONE,
+    {"unicode_chars", "one string per code point"},
+    {"unicode_chr", "UTF-8 encoding of code; raises outside 0..0x10FFFF or for a surrogate"},
+    {"unicode_isalnum", "1 only if s is non-empty and every code point matches (\"\" → 0); raises on invalid UTF-8"},
+    {"unicode_isalpha", "1 only if s is non-empty and every code point matches (\"\" → 0); raises on invalid UTF-8"},
+    {"unicode_isdigit", "1 only if s is non-empty and every code point matches (\"\" → 0); raises on invalid UTF-8"},
+    {"unicode_len", "code points, not bytes (\"héllo\" → 5); raises on invalid UTF-8"},
+    {"unicode_ord", "code point of the first character; raises on \"\" or invalid UTF-8"},
+    {"unicode_valid", "1/0, never raises"});

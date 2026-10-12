@@ -3,7 +3,7 @@
 # self-signed certificate (CTest's C++ harness can't host a server, so this is a shell-driven test,
 # a smoke test, but automated).
 #
-#   https_smoke.sh <embr binary> [--vm]
+#   https_smoke.sh <embr binary> [--backend=NAME]
 #
 # needs: python3, the openssl CLI, and an http plugin built WITH TLS (skips with exit 77 -> CTest
 # "skipped" if any are missing, so a machine without OpenSSL isn't a failure).

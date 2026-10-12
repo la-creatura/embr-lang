@@ -31,6 +31,12 @@ int main() {
           "print(len(re_find_all(\"abc\", \"[0-9]+\")))\n",
           "0\n" },
 
+        { "re_find_all: after an empty match the next search moves one byte on, like JavaScript",
+          "print(len(re_find_all(\"aa\", \"a*?\")))\n"
+          "print(len(re_find_all(\"1 bab\", \"\\\\B.??\")))\n"
+          "print(re_replace(\"abc\", \"x*\", \"-\"))\n",
+          "3\n2\n-a-b-c-\n" },
+
         { "re_replace: replaces every match",
           "print(re_replace(\"2024-01-02\", \"-\", \"/\"))\n",
           "2024/01/02\n" },
@@ -90,6 +96,59 @@ int main() {
           "try\n  re_test(\"a\", \"[a\")\n  print(\"unreachable\")\ncatch e\n  print(\"unclosed class rejected\")\nend\n",
           "deep pattern rejected\nhuge count rejected\nunbalanced rejected\nnothing to repeat rejected\nunclosed class rejected\n" },
 
+        { "re_match_named and $<name>: named groups are numbered like plain ones, and come back as a map",
+          "m = re_match_named(\"2024-01-02\", \"(?<y>\\\\d+)-(?<m>\\\\d+)-(\\\\d+)\")\n"
+          "print(m[\"y\"])\n"
+          "print(m[\"m\"])\n"
+          "print(len(keys(m)))\n"
+          "print(re_match(\"2024-01-02\", \"(?<y>\\\\d+)-(?<m>\\\\d+)\")[2])\n"
+          "print(len(keys(re_match_named(\"abc\", \"(?<d>\\\\d+)\"))))\n"
+          "print(re_match_named(\"ac\", \"a(?<b>b)?c\")[\"b\"] == \"\")\n"
+          "print(re_replace(\"2024-01-02\", \"(?<y>\\\\d+)-(?<m>\\\\d+)-(?<d>\\\\d+)\", \"$<d>/$<m>/$<y>\"))\n"
+          "print(re_replace(\"ab\", \"(?<x>a)\", \"[$<nope>]\"))\n"
+          "print(re_replace(\"ab\", \"(a)\", \"[$<x>]\"))\n",
+          "2024\n01\n2\n01\n0\n1\n02/01/2024\n[]b\n[$<x>]b\n" },
+        { "regex: the m flag makes ^ and $ match at every line (\\n and \\r end a line), also on the fallback engine",
+          "print(len(re_find_all(\"a\\nb\\r\\nc\", \"^\\\\w$\")))\n"
+          "print(len(re_find_all(\"a\\nb\\r\\nc\", \"^\\\\w$\", \"m\")))\n"
+          "print(re_replace(\"x\\ny\", \"^\", \"> \", \"m\"))\n"
+          "print(re_test(\"ab\\ncd\", \"b$\", \"m\"))\n"
+          "print(re_test(\"ab\\ncd\", \"b$\"))\n"
+          "print(len(re_find_all(\"ab\\nab\", \"^a(?=b)\", \"m\")))\n",
+          "0\n3\n> x\n> y\n1\n0\n2\n" },
+        { "regex: an unknown flag, a duplicate or malformed group name, and lookbehind are errors",
+          "try\n"
+          "  re_test(\"a\", \"a\", \"g\")\n"
+          "catch e\n"
+          "  print(\"bad flag rejected\")\n"
+          "end\n"
+          "for p in [\"(?<a>x)(?<a>y)\", \"(?<1a>x)\", \"(?<>x)\", \"(?<a-b>x)\", \"(?<=a)b\"]\n"
+          "  try\n"
+          "    re_test(\"ab\", p)\n"
+          "    print(\"unreachable \" + p)\n"
+          "  catch e\n"
+          "    print(\"rejected\")\n"
+          "  end\n"
+          "end\n",
+          "bad flag rejected\nrejected\nrejected\nrejected\nrejected\nrejected\n" },
+        { "regex: \\x and \\u escapes and characters above 0x7f match their UTF-8 bytes, in a class too",
+          "print(re_test(\"café\", \"caf\\\\u00e9$\"))\n"
+          "print(re_test(\"cafe\", \"caf\\\\u00e9\"))\n"
+          "print(re_match(\"tab\\there\", \"\\\\x09(\\\\w+)\")[1])\n"
+          "print(re_test(\"€\", \"^\\\\u20ac$\"))\n"
+          "print(len(re_find_all(\"a-b_c\", \"[\\\\w-]\")))\n"
+          "print(re_test(\"é\", \"^[\\\\u00e9]$\"))\n"
+          "print(re_match(\"xé\", \"[é]\")[0] == \"é\")\n"
+          "print(re_test(\"a€\", \"^[a\\\\u20ac]+$\"))\n"
+          "for p in [\"[^é]\", \"[a-é]\", \"[é-z]\"]\n"
+          "  try\n"
+          "    re_test(\"é\", p)\n"
+          "    print(\"unreachable \" + p)\n"
+          "  catch e\n"
+          "    print(\"rejected\")\n"
+          "  end\n"
+          "end\n",
+          "1\n0\nhere\n1\n5\n1\n1\n1\nrejected\nrejected\nrejected\n" },
         { "re_replace: a result that would be huge raises instead of running for ages",
           "s = str_repeat(\"x\", 100000)\ntry\n  re_replace(s, \"\", s)\n  print(\"unreachable\")\ncatch e\n  print(\"capped\")\nend\n",
           "capped\n" },

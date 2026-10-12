@@ -1,0 +1,15 @@
+# 20k small records written out as JSON text and read back
+import "embrlib"
+import "json"
+items = []
+i = 0
+while i < 20000
+    items = push(items, {"id": i, "name": "item" + str(i), "tags": ["a", "b"], "score": i * 3})
+    i = i + 1
+end
+text = json_stringify(items)
+back = json_parse(text)
+print(len(text))
+print(len(back))
+print(back[12345]["name"])
+print(len(json_stringify(back)))

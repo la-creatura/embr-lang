@@ -1,0 +1,1168 @@
+# cheader.embr -- read a C header: constants, enums, structs, typedefs and function declarations
+#
+#   import "cheader.embr"
+#   h = cheader_load("raylib.h")
+#   print(h["constants"]["FLAG_VSYNC_HINT"])          # 64
+#   print(h["functions"]["InitWindow"]["ret"])        # void
+#
+# this reads the declarations a binding needs, it is not a C compiler. what it does:
+#   - a small preprocessor: #define (plain and function-like), #undef, #if #ifdef #ifndef #elif #else #endif
+#     with defined() and integer expressions. #include is ignored. comments are dropped
+#   - constants: every #define that works out to a number, a string or a struct literal like
+#     CLITERAL(Color){ 200, 200, 200, 255 } (that one becomes a map keyed by the struct's field names)
+#   - enums (named or not): each member becomes a constant, `enums` keeps them grouped by enum name
+#   - structs and typedefs: fields keep their C type text. unions, bitfields and function bodies are skipped
+#   - function prototypes: `ret`, `params` (type text, names dropped), `variadic`
+#
+# what it leaves out: macros that take arguments, sizeof, anything that needs a type checker. a declaration it
+# cannot read goes in `problems`, a macro it cannot work out goes in `skipped`
+#
+# the result is a plain map:
+#   constants       name -> number, string, or a map for a struct literal
+#   enums           enum name -> {member: value}
+#   types           the typedefs and structs in file order: {kind, name, ...}
+#                   kind is struct (fields), enum, alias (target), funcptr or opaque
+#   structs         name -> arr of [field, c type]
+#   functions       name -> {ret, params, variadic}
+#   function_order  the function names in file order
+#   aliases         macro name -> function name, for `#define GetMouseRay GetScreenToWorldRay`
+#   function_macros names of the macros that take arguments
+#   skipped, problems
+#
+# options (a map as the last argument): defines {name: value} predefined macros (e.g. {GRAPHICS_API_OPENGL_43: 1}),
+# strip [words] to drop from declarations (export macros like RLAPI that expand to nothing are dropped by themselves),
+# include {"KHR/khrplatform.h": "/usr/include/KHR/khrplatform.h"} the #include lines to follow, by the name written in
+# the #include and the file to read. any other #include is ignored, so system headers are never read
+#
+# good to know
+#   - the working state is kept in module level names (__ch_env, __ch_h, __ch_toks, __ch_pos) because a map handed
+#     to a function is a copy. that makes the parser not reentrant, which is fine for a script
+#   - the bit operators are embr's own, on 64 bit ints, so a constant is worked out the way a 64 bit C compiler would
+#   - the preprocessor runs before the declarations are read, and a macro defined twice keeps its last value
+#   - names starting with __ch_ are internal
+
+__module__ = {
+    "version": "1.0.0",
+    "description": "read constants, enums, structs and function declarations from a C header",
+    "capabilities": [],
+}
+
+import "embrlib"
+import "embrmath"
+import "regex"
+import "str"
+
+# working state. __ch_env: vals (names worked out), macros (name -> {body, params}), types (typedef names, for
+# casts), strip (words dropped from declarations), depth, lenient (an unknown name is 0, #if wants that).
+# __ch_h is the result. __ch_toks and __ch_pos are the cursor of the expression being read
+__ch_env = {}
+__ch_h = {}
+__ch_toks = []
+__ch_pos = 0
+
+# the floor of a number as an int
+fn __ch_floor(x)
+    if type(x) == "int"
+        return x
+    end
+    return math_floor(x)
+end
+
+# numbers written in C
+
+fn __ch_digit(c)
+    local o = str_ord(c)
+    if o >= 48 and o <= 57
+        return o - 48
+    end
+    if o >= 97 and o <= 102
+        return o - 87
+    end
+    if o >= 65 and o <= 70
+        return o - 55
+    end
+    return -1
+end
+
+fn __ch_parse_radix(digits, radix, whole)
+    local v = 0
+    local i = 0
+    while i < len(digits)
+        local d = __ch_digit(digits[i])
+        if d < 0 or d >= radix
+            error("cheader: bad digit in number '" + whole + "'")
+        end
+        v = v * radix + d
+        i += 1
+    end
+    return v
+end
+
+# a C number token to an int or a float. the u/l/f suffixes are dropped
+fn __ch_number(text)
+    local t = text
+    if re_test(t, "^0[xX]")
+        return __ch_parse_radix(re_replace(slice(t, 2), "[uUlL]+$", ""), 16, text)
+    end
+    if re_test(t, "^0[bB]")
+        return __ch_parse_radix(re_replace(slice(t, 2), "[uUlL]+$", ""), 2, text)
+    end
+    if re_test(t, "[.eE]")
+        return num(re_replace(t, "[fFlL]+$", "")) * 1.0
+    end
+    t = re_replace(t, "[uUlLfF]+$", "")
+    if len(t) > 1 and t[0] == "0"
+        return __ch_parse_radix(slice(t, 1), 8, text)
+    end
+    return __ch_parse_radix(t, 10, text)
+end
+
+fn __ch_unescape(body)
+    local out = ""
+    local i = 0
+    while i < len(body)
+        local c = body[i]
+        if c == "\\" and i + 1 < len(body)
+            i += 1
+            local e = body[i]
+            if e == "n"
+                out += "\n"
+            elif e == "t"
+                out += "\t"
+            elif e == "r"
+                out += "\r"
+            elif e == "0"
+                out += str_chr(0)
+            else
+                out += e
+            end
+        else
+            out += c
+        end
+        i += 1
+    end
+    return out
+end
+
+# tokens
+
+__ch_tok_pat = "0[xX][0-9a-fA-F]+[uUlL]*|0[bB][01]+[uUlL]*|\\d+\\.?\\d*(?:[eE][+-]?\\d+)?[fFuUlL]*|\\.\\d+(?:[eE][+-]?\\d+)?[fFlL]*|[A-Za-z_]\\w*|\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^'\\\\]|\\\\.)*'|\\.\\.\\.|<<|>>|&&|\\|\\||[<>=!]=|->|\\S"
+
+fn __ch_tokens(text)
+    local out = []
+    for m in re_find_all(text, __ch_tok_pat)
+        append(&out, m[0])
+    end
+    return out
+end
+
+# comments are removed first, with strings and chars skipped over so a // inside "http://x" survives. a block
+# comment keeps its newlines so a line number still means something
+__ch_comment_pat = "/\\*[\\s\\S]*?\\*/|//[^\\n]*|\"(?:[^\"\\\\\\n]|\\\\.)*\"|'(?:[^'\\\\\\n]|\\\\.)*'|[^/\"']+|."
+
+fn __ch_strip_comments(text)
+    local parts = []
+    for m in re_find_all(text, __ch_comment_pat)
+        local s = m[0]
+        if len(s) >= 2 and s[0] == "/" and s[1] == "*"
+            append(&parts, " " + str_repeat("\n", str_count(s, "\n")))
+        elif len(s) >= 2 and s[0] == "/" and s[1] == "/"
+            append(&parts, " ")
+        else
+            append(&parts, s)
+        end
+    end
+    return join(parts, "")
+end
+
+# expressions: a precedence climbing evaluator over __ch_toks / __ch_pos
+
+__ch_levels = {
+    "||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
+    "==": 6, "!=": 6,
+    "<": 7, ">": 7, "<=": 7, ">=": 7,
+    "<<": 8, ">>": 8,
+    "+": 9, "-": 9,
+    "*": 10, "/": 10, "%": 10,
+}
+
+__ch_type_words = {
+    "int": 1, "char": 1, "short": 1, "long": 1, "float": 1, "double": 1, "unsigned": 1, "signed": 1,
+    "void": 1, "const": 1, "size_t": 1, "bool": 1, "_Bool": 1,
+    "int8_t": 1, "int16_t": 1, "int32_t": 1, "int64_t": 1,
+    "uint8_t": 1, "uint16_t": 1, "uint32_t": 1, "uint64_t": 1,
+}
+
+fn __ch_cur()
+    if __ch_pos < len(__ch_toks)
+        return __ch_toks[__ch_pos]
+    end
+    return ""
+end
+
+fn __ch_next()
+    local t = __ch_cur()
+    __ch_pos = __ch_pos + 1
+    return t
+end
+
+fn __ch_is_int(v)
+    return type(v) == "int"
+end
+
+fn __ch_div(a, b)
+    if b == 0
+        error("cheader: division by zero")
+    end
+    if __ch_is_int(a) and __ch_is_int(b)
+        local q = a / b
+        if q >= 0
+            return __ch_floor(q)
+        end
+        return -__ch_floor(-q)
+    end
+    return a / b
+end
+
+fn __ch_arith(op, a, b)
+    if op == "+"
+        return a + b
+    elif op == "-"
+        return a - b
+    elif op == "*"
+        return a * b
+    elif op == "/"
+        return __ch_div(a, b)
+    elif op == "%"
+        if b == 0
+            error("cheader: division by zero")
+        end
+        return a % b
+    elif op == "<<"
+        return a << b
+    elif op == ">>"
+        return a >> b
+    elif op == "&"
+        return a & b
+    elif op == "|"
+        return a | b
+    elif op == "^"
+        return a ^ b
+    elif op == "=="
+        return a == b and 1 or 0
+    elif op == "!="
+        return a != b and 1 or 0
+    elif op == "<"
+        return a < b and 1 or 0
+    elif op == ">"
+        return a > b and 1 or 0
+    elif op == "<="
+        return a <= b and 1 or 0
+    elif op == ">="
+        return a >= b and 1 or 0
+    end
+    error("cheader: unknown operator " + op)
+end
+
+fn __ch_truthy(v)
+    if v == 0
+        return 0
+    end
+    return 1
+end
+
+# works out text as an expression, with the cursor put back afterwards
+fn __ch_eval_text(text)
+    return __ch_eval_tokens(__ch_tokens(text), text)
+end
+
+fn __ch_eval_tokens(toks, what)
+    local saved_toks = __ch_toks
+    local saved_pos = __ch_pos
+    __ch_toks = toks
+    __ch_pos = 0
+    local any v = 0
+    local failed = 0
+    local msg = ""
+    try
+        v = __ch_ternary()
+        if __ch_pos < len(__ch_toks)
+            error("cheader: stray '" + __ch_cur() + "' in: " + what)
+        end
+    catch e
+        failed = 1
+        msg = e["message"]
+    end
+    __ch_toks = saved_toks
+    __ch_pos = saved_pos
+    if failed == 1
+        error(msg)
+    end
+    return v
+end
+
+# the value of a name: a constant already known, or a macro worked out now (and remembered)
+fn __ch_name_value(name)
+    if has(__ch_env["vals"], name)
+        return __ch_env["vals"][name]
+    end
+    if has(__ch_env["macros"], name)
+        local m = __ch_env["macros"][name]
+        if m["params"] != ""
+            error("cheader: '" + name + "' takes arguments")
+        end
+        if __ch_env["depth"] > 40
+            error("cheader: macro '" + name + "' refers to itself")
+        end
+        __ch_env["depth"] = __ch_env["depth"] + 1
+        local any v = 0
+        local failed = 0
+        local msg = ""
+        try
+            v = __ch_eval_text(m["body"])
+        catch e
+            failed = 1
+            msg = e["message"]
+        end
+        __ch_env["depth"] = __ch_env["depth"] - 1
+        if failed == 1
+            error(msg)
+        end
+        __ch_env["vals"][name] = v
+        return v
+    end
+    if __ch_env["lenient"] == 1
+        return 0
+    end
+    error("cheader: unknown name '" + name + "'")
+end
+
+fn __ch_ternary()
+    local c = __ch_binary(1)
+    if __ch_cur() == "?"
+        __ch_next()
+        local a = __ch_ternary()
+        if __ch_next() != ":"
+            error("cheader: missing ':' in a ?: expression")
+        end
+        local b = __ch_ternary()
+        if __ch_truthy(c) == 1
+            return a
+        end
+        return b
+    end
+    return c
+end
+
+fn __ch_binary(min_level)
+    local left = __ch_unary()
+    while 1
+        local op = __ch_cur()
+        if !has(__ch_levels, op)
+            break
+        end
+        local lv = __ch_levels[op]
+        if lv < min_level
+            break
+        end
+        __ch_next()
+        local right = __ch_binary(lv + 1)
+        if op == "&&"
+            left = (__ch_truthy(left) == 1 and __ch_truthy(right) == 1) and 1 or 0
+        elif op == "||"
+            left = (__ch_truthy(left) == 1 or __ch_truthy(right) == 1) and 1 or 0
+        else
+            left = __ch_arith(op, left, right)
+        end
+    end
+    return left
+end
+
+# is the group at the current '(' a cast like (unsigned int) or (float)? gives the position of its ')' or -1
+fn __ch_cast_end()
+    local i = __ch_pos + 1
+    local n = 0
+    while i < len(__ch_toks) and __ch_toks[i] != ")"
+        local t = __ch_toks[i]
+        if !has(__ch_type_words, t) and t != "*" and !has(__ch_env["types"], t)
+            return -1
+        end
+        n += 1
+        i += 1
+    end
+    if i >= len(__ch_toks) or n == 0
+        return -1
+    end
+    return i
+end
+
+fn __ch_truncate(v)
+    if __ch_is_int(v)
+        return v
+    end
+    if v >= 0
+        return __ch_floor(v)
+    end
+    return -__ch_floor(-v)
+end
+
+fn __ch_unary()
+    local t = __ch_next()
+    if t == ""
+        error("cheader: an expression ended too early")
+    end
+    if t == "-"
+        return -__ch_unary()
+    elif t == "+"
+        return __ch_unary()
+    elif t == "!"
+        if __ch_truthy(__ch_unary()) == 1
+            return 0
+        end
+        return 1
+    elif t == "~"
+        return ~__ch_unary()
+    elif t == "("
+        __ch_pos = __ch_pos - 1
+        local ce = __ch_cast_end()
+        if ce >= 0
+            local words = join(slice(__ch_toks, __ch_pos + 1, ce), " ")
+            __ch_pos = ce + 1
+            local v = __ch_unary()
+            if re_test(words, "\\b(float|double)\\b")
+                return v * 1.0
+            end
+            if re_test(words, "\\b(int|long|short|char|unsigned|signed|size_t)\\b")
+                return __ch_truncate(v)
+            end
+            return v
+        end
+        __ch_pos = __ch_pos + 1
+        local v = __ch_ternary()
+        if __ch_next() != ")"
+            error("cheader: missing ')' in an expression")
+        end
+        return v
+    elif t == "defined"
+        local name = __ch_next()
+        if name == "("
+            name = __ch_next()
+            if __ch_next() != ")"
+                error("cheader: missing ')' after defined(")
+            end
+        end
+        return (has(__ch_env["macros"], name) or has(__ch_env["vals"], name)) and 1 or 0
+    elif t == "sizeof"
+        error("cheader: sizeof is not supported")
+    end
+    local c = t[0]
+    if c == "\""
+        local s = __ch_unescape(slice(t, 1, len(t) - 1))
+        while len(__ch_cur()) > 0 and __ch_cur()[0] == "\""
+            local more = __ch_next()
+            s += __ch_unescape(slice(more, 1, len(more) - 1))
+        end
+        return s
+    elif c == "'"
+        local body = __ch_unescape(slice(t, 1, len(t) - 1))
+        if len(body) != 1
+            error("cheader: bad character literal " + t)
+        end
+        return str_ord(body)
+    elif str_isdigit(c) or (c == "." and len(t) > 1)
+        return __ch_number(t)
+    elif str_isalpha(c) or c == "_"
+        # a call of a macro that takes arguments is not something we can work out
+        if __ch_cur() == "(" and has(__ch_env["macros"], t) and __ch_env["macros"][t]["params"] != ""
+            error("cheader: '" + t + "' takes arguments")
+        end
+        return __ch_name_value(t)
+    end
+    error("cheader: unexpected '" + t + "' in an expression")
+end
+
+# the preprocessor
+
+# an #if line that cannot be worked out counts as false
+fn __ch_if_value(text)
+    __ch_env["lenient"] = 1
+    local v = 0
+    try
+        v = __ch_truthy(__ch_eval_text(text))
+    catch e
+        __ch_env["depth"] = 0
+        v = 0
+    end
+    __ch_env["lenient"] = 0
+    return v
+end
+
+fn __ch_defined(name)
+    return has(__ch_env["macros"], name) and 1 or 0
+end
+
+# returns the lines that are left once the directives are done, and fills __ch_env["macros"]
+fn __ch_preprocess(text)
+    local src = re_replace(__ch_strip_comments(text), "\\\\\\r?\\n", " ")
+    local out = []
+    # one entry per open #if: {parent: active outside, taken: a branch already ran}
+    local stack = []
+    local active = 1
+    for line in str_split(src, "\n")
+        local ln = str_strip(line)
+        if len(ln) > 0 and ln[0] == "#"
+            local m = re_match(ln, "^#\\s*(\\w+)\\s*(.*)$")
+            if len(m) == 0
+                continue
+            end
+            local d = m[1]
+            local rest = m[2]
+            if d == "if" or d == "ifdef" or d == "ifndef"
+                local cond = 0
+                if active == 1
+                    if d == "if"
+                        cond = __ch_if_value(rest)
+                    elif d == "ifdef"
+                        cond = __ch_defined(str_strip(rest))
+                    else
+                        cond = 1 - __ch_defined(str_strip(rest))
+                    end
+                end
+                append(&stack, {parent: active, taken: cond})
+                active = active * cond
+            elif d == "elif"
+                if len(stack) == 0
+                    error("cheader: #elif without #if")
+                end
+                local top = stack[len(stack) - 1]
+                local cond = 0
+                if top["parent"] == 1 and top["taken"] == 0
+                    cond = __ch_if_value(rest)
+                end
+                if cond == 1
+                    top["taken"] = 1
+                end
+                stack[len(stack) - 1] = top
+                active = top["parent"] * cond
+            elif d == "else"
+                if len(stack) == 0
+                    error("cheader: #else without #if")
+                end
+                local top = stack[len(stack) - 1]
+                local cond = 1 - top["taken"]
+                top["taken"] = 1
+                stack[len(stack) - 1] = top
+                active = top["parent"] * cond
+            elif d == "endif"
+                if len(stack) == 0
+                    error("cheader: #endif without #if")
+                end
+                active = stack[len(stack) - 1]["parent"]
+                remove_last(&stack)
+            elif active == 1 and d == "include"
+                local im = re_match(rest, "^[<\"]([^>\"]+)[>\"]")
+                if len(im) > 0 and has(__ch_env["include"], im[1]) and !has(__ch_env["included"], im[1])
+                    __ch_env["included"][im[1]] = 1
+                    for l in __ch_preprocess(load_file(__ch_env["include"][im[1]]))
+                        append(&out, l)
+                    end
+                end
+            elif active == 1 and d == "define"
+                local dm = re_match(rest, "^(\\w+)(?:\\(([^)]*)\\))?\\s*(.*)$")
+                if len(dm) > 0
+                    local params = ""
+                    if re_test(rest, "^\\w+\\(")
+                        params = "(" + dm[2] + ")"
+                    end
+                    __ch_env["macros"][dm[1]] = {body: str_strip(dm[3]), params: params}
+                    if has(__ch_env["vals"], dm[1])
+                        remove_key(&__ch_env["vals"], dm[1])
+                    end
+                end
+            elif active == 1 and d == "undef"
+                local nm = str_strip(rest)
+                if has(__ch_env["macros"], nm)
+                    remove_key(&__ch_env["macros"], nm)
+                end
+                if has(__ch_env["vals"], nm)
+                    remove_key(&__ch_env["vals"], nm)
+                end
+            end
+        elif active == 1
+            append(&out, line)
+        end
+    end
+    if len(stack) != 0
+        error("cheader: #if without #endif")
+    end
+    return out
+end
+
+# declarations
+
+__ch_drop = {
+    "extern": 1, "static": 1, "inline": 1, "__inline__": 1, "__inline": 1, "register": 1,
+    "restrict": 1, "__restrict": 1, "__restrict__": 1, "__extension__": 1, "volatile": 1,
+}
+
+__ch_attrs = {"__attribute__": 1, "__declspec": 1, "_Alignas": 1, "__asm__": 1, "__asm": 1}
+
+fn __ch_is_ident(t)
+    return re_test(t, "^[A-Za-z_]\\w*$")
+end
+
+# the position of the bracket that closes the one at i, or -1
+fn __ch_match(toks, i)
+    local depth = 0
+    local j = i
+    while j < len(toks)
+        local t = toks[j]
+        if t == "(" or t == "[" or t == "{"
+            depth += 1
+        elif t == ")" or t == "]" or t == "}"
+            depth -= 1
+            if depth == 0
+                return j
+            end
+        end
+        j += 1
+    end
+    return -1
+end
+
+fn __ch_split_commas(toks)
+    local out = []
+    local cur = []
+    local depth = 0
+    for t in toks
+        if t == "(" or t == "[" or t == "{"
+            depth += 1
+        elif t == ")" or t == "]" or t == "}"
+            depth -= 1
+        end
+        if t == "," and depth == 0
+            append(&out, cur)
+            cur = []
+        else
+            append(&cur, t)
+        end
+    end
+    if len(cur) > 0
+        append(&out, cur)
+    end
+    return out
+end
+
+fn __ch_index_of(toks, want, from)
+    local i = from
+    while i < len(toks)
+        if toks[i] == want
+            return i
+        end
+        i += 1
+    end
+    return -1
+end
+
+# is the macro just words and stars (APIENTRYP is `APIENTRY *`), something a declaration can use as it is
+fn __ch_type_macro(name)
+    if !has(__ch_env["macros"], name)
+        return 0
+    end
+    local m = __ch_env["macros"][name]
+    if m["params"] != "" or m["body"] == ""
+        return 0
+    end
+    return re_test(m["body"], "^[A-Za-z_*\\s]+$") and 1 or 0
+end
+
+# drops export macros, storage words and __attribute__/__declspec groups from the tokens, and writes out the
+# macros that stand for a type or a star. depth stops a macro that names itself
+fn __ch_clean(toks, depth)
+    local out = []
+    local i = 0
+    while i < len(toks)
+        local t = toks[i]
+        if has(__ch_attrs, t)
+            i += 1
+            if i < len(toks) and toks[i] == "("
+                i = __ch_match(toks, i)
+                if i < 0
+                    break
+                end
+            end
+        elif depth < 8 and __ch_type_macro(t) == 1
+            for x in __ch_clean(__ch_tokens(__ch_env["macros"][t]["body"]), depth + 1)
+                append(&out, x)
+            end
+        elif !has(__ch_drop, t) and !has(__ch_env["strip"], t)
+            append(&out, t)
+        end
+        i += 1
+    end
+    return out
+end
+
+fn __ch_note(text)
+    append(&__ch_h["problems"], text)
+end
+
+# does the statement look like a function with a body, which we skip
+fn __ch_is_funcdef(st)
+    if len(st) == 0
+        return 0
+    end
+    local f = st[0]
+    if f == "typedef" or f == "struct" or f == "enum" or f == "union"
+        return 0
+    end
+    local p = __ch_index_of(st, "(", 0)
+    local b = __ch_index_of(st, "{", 0)
+    if p >= 0 and b > p
+        return 1
+    end
+    return 0
+end
+
+fn __ch_statements(toks)
+    local out = []
+    local cur = []
+    local depth = 0
+    for t in toks
+        append(&cur, t)
+        if t == "{"
+            depth += 1
+        elif t == "}"
+            depth -= 1
+            if depth == 0 and __ch_is_funcdef(cur) == 1
+                append(&out, cur)
+                cur = []
+            end
+        elif t == ";" and depth == 0
+            append(&out, cur)
+            cur = []
+        end
+    end
+    return out
+end
+
+# "const char *text" -> the type tokens without the name. a parameter has a name when its last word is a plain
+# identifier and something comes before it that is not struct/enum/union
+fn __ch_strip_name(toks)
+    if len(toks) < 2
+        return toks
+    end
+    local last = toks[len(toks) - 1]
+    local prev = toks[len(toks) - 2]
+    if __ch_is_ident(last) and !has(__ch_type_words, last) and prev != "struct" and prev != "enum" and prev != "union"
+        return slice(toks, 0, len(toks) - 1)
+    end
+    return toks
+end
+
+fn __ch_param_type(toks)
+    if __ch_index_of(toks, "(", 0) >= 0
+        return "void *"
+    end
+    local b = __ch_index_of(toks, "[", 0)
+    if b >= 0
+        return join(concat(__ch_strip_name(slice(toks, 0, b)), ["*"]), " ")
+    end
+    return join(__ch_strip_name(toks), " ")
+end
+
+fn __ch_function(toks)
+    local open = __ch_index_of(toks, "(", 0)
+    if open < 2 or !__ch_is_ident(toks[open - 1])
+        __ch_note("skipped a declaration: " + join(toks, " "))
+        return 0
+    end
+    local name = toks[open - 1]
+    local ret = slice(toks, 0, open - 1)
+    local close = __ch_match(toks, open)
+    if close < 0
+        __ch_note("skipped a declaration: " + join(toks, " "))
+        return 0
+    end
+    local params = []
+    local variadic = 0
+    for p in __ch_split_commas(slice(toks, open + 1, close))
+        if len(p) == 1 and p[0] == "..."
+            variadic = 1
+        elif len(p) != 1 or p[0] != "void"
+            append(&params, __ch_param_type(p))
+        end
+    end
+    __ch_h["functions"][name] = {ret: join(ret, " "), params: params, variadic: variadic}
+    append(&__ch_h["function_order"], name)
+    return 1
+end
+
+# struct fields: "float x, y;" "unsigned char *data;" "float m[4];" one entry per name. an array of N becomes N
+# fields (name_0 .. name_N-1), which lays out the same
+fn __ch_fields(body)
+    local fields = []
+    local decls = []
+    local cur = []
+    for t in body
+        if t == ";"
+            append(&decls, cur)
+            cur = []
+        else
+            append(&cur, t)
+        end
+    end
+    for decl in decls
+        if len(decl) == 0
+            continue
+        end
+        if __ch_index_of(decl, "{", 0) >= 0 or __ch_index_of(decl, ":", 0) >= 0 or decl[0] == "union"
+            __ch_note("skipped a nested definition, bitfield or union: " + join(decl, " "))
+            continue
+        end
+        local segs = __ch_split_commas(decl)
+        local first = segs[0]
+        # the first name is the last word before an optional [N]
+        local nm = len(first) - 1
+        local fb = __ch_index_of(first, "[", 0)
+        if fb >= 0
+            nm = fb - 1
+        end
+        if nm < 1
+            __ch_note("skipped a field: " + join(decl, " "))
+            continue
+        end
+        local base = slice(first, 0, nm)
+        # stars that stick to the first name belong to it, not to the shared base type
+        local stars0 = 0
+        while len(base) > 0 and base[len(base) - 1] == "*"
+            remove_last(&base)
+            stars0 += 1
+        end
+        local si = 0
+        for seg in segs
+            local sn = len(seg) - 1
+            local sb = __ch_index_of(seg, "[", 0)
+            if sb >= 0
+                sn = sb - 1
+            end
+            local stars = 0
+            if si == 0
+                stars = stars0
+            else
+                local q = 0
+                while q < sn and seg[q] == "*"
+                    stars += 1
+                    q += 1
+                end
+            end
+            local fname = seg[sn]
+            local ctype = join(base, " ") + str_repeat(" *", stars)
+            if sb >= 0
+                local count = 0
+                local good = 1
+                try
+                    count = __ch_eval_tokens(slice(seg, sb + 1, __ch_match(seg, sb)), "array size")
+                catch e
+                    good = 0
+                    __ch_env["depth"] = 0
+                    __ch_note("field " + fname + ": " + e["message"])
+                end
+                local n = 0
+                while good == 1 and n < count
+                    append(&fields, [fname + "_" + str(n), ctype])
+                    n += 1
+                end
+            else
+                append(&fields, [fname, ctype])
+            end
+            si += 1
+        end
+    end
+    return fields
+end
+
+fn __ch_enum_members(body)
+    local prev = -1
+    local members = {}
+    for seg in __ch_split_commas(body)
+        if len(seg) == 0
+            continue
+        end
+        local name = seg[0]
+        local value = prev + 1
+        if len(seg) > 1
+            if seg[1] != "="
+                __ch_note("skipped an enum member: " + join(seg, " "))
+                return members
+            end
+            local good = 1
+            try
+                value = __ch_eval_tokens(slice(seg, 2), "enum member " + name)
+            catch e
+                good = 0
+                __ch_env["depth"] = 0
+                __ch_note("enum member " + name + ": " + e["message"])
+            end
+            if good == 0
+                return members
+            end
+        end
+        members[name] = value
+        __ch_env["vals"][name] = value
+        __ch_h["constants"][name] = value
+        prev = value
+    end
+    return members
+end
+
+fn __ch_add_type(entry)
+    append(&__ch_h["types"], entry)
+    __ch_env["types"][entry["name"]] = 1
+end
+
+fn __ch_typedef(toks)
+    if len(toks) == 0
+        return 0
+    end
+    local kind = toks[0]
+    if kind == "struct" or kind == "union" or kind == "enum"
+        local idx = 1
+        local tag = ""
+        if idx < len(toks) and toks[idx] != "{"
+            tag = toks[idx]
+            idx += 1
+        end
+        if idx < len(toks) and toks[idx] == "{"
+            local close = __ch_match(toks, idx)
+            if close < 0
+                __ch_note("unbalanced braces in a typedef")
+                return 0
+            end
+            local body = slice(toks, idx + 1, close)
+            local name = ""
+            local ptr = 0
+            for t in slice(toks, close + 1)
+                if t == "*"
+                    ptr = 1
+                elif __ch_is_ident(t)
+                    name = t
+                end
+            end
+            if name == ""
+                name = tag
+            end
+            if kind == "enum"
+                local members = __ch_enum_members(body)
+                if name != ""
+                    __ch_h["enums"][name] = members
+                    __ch_add_type({kind: "enum", name: name})
+                end
+            elif kind == "union"
+                __ch_note("skipped union " + name)
+            else
+                local fields = __ch_fields(body)
+                __ch_h["structs"][name] = fields
+                if tag != "" and tag != name
+                    __ch_h["structs"][tag] = fields
+                end
+                __ch_add_type({kind: "struct", name: name, tag: tag, fields: fields})
+            end
+            if ptr == 1
+                __ch_add_type({kind: "alias", name: name + "_ptr", target: "void *"})
+            end
+            return 1
+        end
+        # typedef struct Tag Name;  (no body)
+        local name = toks[len(toks) - 1]
+        if __ch_index_of(toks, "*", 0) >= 0
+            __ch_add_type({kind: "alias", name: name, target: "void *"})
+        elif kind == "enum"
+            __ch_add_type({kind: "alias", name: name, target: "int"})
+        else
+            __ch_add_type({kind: "opaque", name: name})
+        end
+        return 1
+    end
+    # typedef ret (*Name)(params);
+    local p = __ch_index_of(toks, "(", 0)
+    if p >= 0
+        if p + 2 < len(toks) and toks[p + 1] == "*" and __ch_is_ident(toks[p + 2])
+            __ch_add_type({kind: "funcptr", name: toks[p + 2]})
+        else
+            __ch_note("skipped a typedef: " + join(toks, " "))
+        end
+        return 1
+    end
+    if __ch_index_of(toks, "[", 0) >= 0
+        __ch_note("skipped an array typedef: " + join(toks, " "))
+        return 0
+    end
+    local name = toks[len(toks) - 1]
+    local target = slice(toks, 0, len(toks) - 1)
+    if len(target) == 0 or !__ch_is_ident(name)
+        __ch_note("skipped a typedef: " + join(toks, " "))
+        return 0
+    end
+    __ch_add_type({kind: "alias", name: name, target: join(target, " ")})
+    return 1
+end
+
+# one statement: a typedef, a struct/enum with a tag, or a prototype. variables and function bodies are skipped
+fn __ch_statement(st)
+    local toks = st
+    if len(toks) > 0 and toks[len(toks) - 1] == ";"
+        toks = slice(toks, 0, len(toks) - 1)
+    end
+    if len(toks) == 0
+        return 0
+    end
+    local first = toks[0]
+    if first == "typedef"
+        return __ch_typedef(slice(toks, 1))
+    end
+    local brace = __ch_index_of(toks, "{", 0)
+    if (first == "struct" or first == "enum" or first == "union") and brace >= 0 and __ch_index_of(toks, "(", 0) < 0
+        # struct Tag { ... };  or  enum { A, B };  : read it like a typedef with the tag as the name
+        local close = __ch_match(toks, brace)
+        if close == len(toks) - 1
+            return __ch_typedef(concat(toks, [""]))
+        end
+        return 0
+    end
+    if __ch_index_of(toks, "(", 0) >= 0 and brace < 0
+        return __ch_function(toks)
+    end
+    return 0
+end
+
+# constants that come from #define
+
+__ch_literal_pat = "^(?:CLITERAL\\(\\s*(\\w+)\\s*\\)|\\(\\s*(\\w+)\\s*\\))\\s*\\{(.*)\\}$"
+
+# CLITERAL(Color){ 1, 2, 3, 4 } -> {r: 1, g: 2, b: 3, a: 4}, or an empty map when body is not one
+fn __ch_struct_literal(body)
+    local m = re_match(body, __ch_literal_pat)
+    if len(m) == 0
+        return {}
+    end
+    local sname = m[1]
+    if sname == ""
+        sname = m[2]
+    end
+    if !has(__ch_h["structs"], sname)
+        error("cheader: struct literal of unknown type " + sname)
+    end
+    local fields = __ch_h["structs"][sname]
+    local parts = __ch_split_commas(__ch_tokens(m[3]))
+    if len(parts) != len(fields)
+        error("cheader: struct literal of " + sname + " has " + str(len(parts)) + " values for " + str(len(fields)) + " fields")
+    end
+    local out = {}
+    local i = 0
+    while i < len(parts)
+        out[fields[i][0]] = __ch_eval_tokens(parts[i], "struct literal")
+        i += 1
+    end
+    return out
+end
+
+fn __ch_finish()
+    for name in keys(__ch_env["macros"])
+        local m = __ch_env["macros"][name]
+        if m["params"] != ""
+            append(&__ch_h["function_macros"], name)
+            continue
+        end
+        if has(__ch_h["constants"], name) or m["body"] == ""
+            continue
+        end
+        if has(__ch_h["functions"], m["body"])
+            __ch_h["aliases"][name] = m["body"]
+            continue
+        end
+        local good = 1
+        try
+            local lit = __ch_struct_literal(m["body"])
+            if len(lit) > 0
+                __ch_h["constants"][name] = lit
+            else
+                __ch_h["constants"][name] = __ch_name_value(name)
+            end
+        catch e
+            good = 0
+            __ch_env["depth"] = 0
+        end
+        if good == 0
+            append(&__ch_h["skipped"], name)
+        end
+    end
+end
+
+fn __ch_options(rest)
+    if len(rest) > 0
+        return rest[0]
+    end
+    return {}
+end
+
+# cheader_parse(text: str, options?: map) -> map
+# reads the C header text and gives back what it declares (see the top of this file for the shape of the result)
+fn cheader_parse(text, ...rest)
+    local opts = __ch_options(rest)
+    __ch_env = {vals: {}, macros: {}, types: {}, strip: {}, depth: 0, lenient: 0, include: {}, included: {}}
+    __ch_h = {
+        constants: {}, enums: {}, types: [], structs: {}, functions: {}, function_order: [],
+        aliases: {}, function_macros: [], skipped: [], problems: [],
+    }
+    if has(opts, "defines")
+        for k, v in opts["defines"]
+            __ch_env["macros"][k] = {body: str(v), params: ""}
+        end
+    end
+    if has(opts, "strip")
+        for w in opts["strip"]
+            __ch_env["strip"][w] = 1
+        end
+    end
+    if has(opts, "include")
+        __ch_env["include"] = opts["include"]
+    end
+    local lines = __ch_preprocess(text)
+    # a macro that expands to nothing is an export marker (RLAPI): drop it from declarations as well
+    for name in keys(__ch_env["macros"])
+        local m = __ch_env["macros"][name]
+        if m["params"] == "" and (m["body"] == "" or has(__ch_drop, m["body"]))
+            __ch_env["strip"][name] = 1
+        end
+    end
+    local toks = __ch_clean(__ch_tokens(join(lines, "\n")), 0)
+    for st in __ch_statements(toks)
+        try
+            __ch_statement(st)
+        catch e
+            __ch_env["depth"] = 0
+            __ch_note(e["message"])
+        end
+    end
+    __ch_finish()
+    return __ch_h
+end
+
+# cheader_load(path: str, options?: map) -> map
+# reads a header file and parses it
+fn cheader_load(path, ...rest)
+    return cheader_parse(load_file(path), __ch_options(rest))
+end
+
+# cheader_eval(expression: str, header?: map) -> any
+# works out a C constant expression (`1 << 3`, `FLAG_A | FLAG_B`), with the constants of a parsed header in scope
+fn cheader_eval(expression, ...rest)
+    __ch_env = {vals: {}, macros: {}, types: {}, strip: {}, depth: 0, lenient: 0, include: {}, included: {}}
+    if len(rest) > 0
+        for k, v in rest[0]["constants"]
+            __ch_env["vals"][k] = v
+        end
+    end
+    return __ch_eval_text(expression)
+end
