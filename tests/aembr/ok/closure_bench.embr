@@ -1,0 +1,15 @@
+# the same as tools/bench/closure.embr with the return type of the closure written
+fn make_counter() -> fn() -> int
+    n = 0
+    return fn() -> int
+        n = n + 1
+        return n
+    end
+end
+c = make_counter()
+i = 0
+while i < 500000
+    c()
+    i = i + 1
+end
+print(c())

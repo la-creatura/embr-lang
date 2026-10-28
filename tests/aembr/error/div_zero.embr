@@ -1,0 +1,8 @@
+fn half(x: int) -> float
+    return x / (x - x)
+end
+fn outer(x: int) -> float
+    return half(x) + 1.0
+end
+print(1)
+print(outer(3))

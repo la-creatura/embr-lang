@@ -1,0 +1,2 @@
+# refuse: the call to 'abs'
+print(abs(1))

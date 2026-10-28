@@ -1,0 +1,45 @@
+import "embrlib"
+import "time"
+import "str"
+import "@LIB@"
+# usage: embr bench_csv.embr. best-of-3 milliseconds. the table has 20000 records of 6 fields (about 1 MB)
+fn best(f: fn(), reps: int) -> float
+    b = 1000000.0
+    r = 0
+    while r < reps
+        t0 = time_monotonic()
+        f()
+        t = (time_monotonic() - t0) * 1000.0
+        if t < b
+            b = t
+        end
+        r += 1
+    end
+    return b
+end
+fn row(label, ms)
+    print(str_pad_right(label, 28), num_fixed(ms, 2), "ms")
+end
+fn make_text() -> str
+    out = "id,name,score,note,city,flag\n"
+    i = 0
+    while i < 20000
+        out = out + str(i) + ",name" + str(i) + "," + str(i * 3 % 1000) + ",\"a, b \"\"" + str(i) + "\"\"\",Berlin,x\n"
+        i += 1
+    end
+    return out
+end
+text = make_text()
+rows = csv_parse(text, ",")
+anyrows = rows
+small = "a,b,c\n1,\"x,y\",3\n"
+row("parse 1 MB", best(fn() csv_parse(text, ",") end, 3))
+row("parse_dicts 1 MB", best(fn() csv_parse_dicts(text, ",") end, 3))
+row("stringify 20000 rows", best(fn() csv_stringify(rows, ",") end, 3))
+row("20k x parse small", best(fn()
+    i = 0
+    while i < 20000
+        csv_parse(small, ",")
+        i += 1
+    end
+end, 3))

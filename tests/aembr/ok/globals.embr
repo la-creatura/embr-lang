@@ -1,0 +1,26 @@
+import "embrlib"
+# top level names that functions read and change become globals of the program
+counter = 0
+names = ["a", "b"]
+label = "x"
+scale = 2.5
+fn bump(n: int)
+    counter = counter + n
+end
+fn add(s: str)
+    append(&names, s)
+    label = label + s
+end
+fn total() -> float
+    return scale * counter
+end
+bump(2)
+bump(3)
+add("c")
+add("d")
+print(counter)
+print(len(names))
+print(label)
+print(total())
+scale = 4.0
+print(total())

@@ -1,0 +1,40 @@
+# strings: concat, compare, index, str(), join, len, building in a loop
+import "embrlib"
+fn shout(s: str) -> str
+    return s + "!"
+end
+fn repeat(s: str, n: int) -> str
+    out = ""
+    i = 0
+    while i < n
+        out = out + s
+        i = i + 1
+    end
+    return out
+end
+a = "ab"
+b = a + "cd"
+print(b)
+print(a == "ab")
+print(a != "ab")
+print(b == "abcd")
+print(len(b))
+print(b[2])
+print(shout(shout(a)))
+print(repeat("xy", 4))
+print(str(42) + "-" + str(2.5) + "-" + str(7 / 2))
+parts = ["one", "two", "three"]
+print(join(parts, ", "))
+print(join(parts))
+list = []
+list = push(list, "q")
+list = push(list, "r")
+print(join(list, "+"))
+s = ""
+s = s + s
+s = s + "z"
+s = s + s
+print(s)
+e = ""
+print(len(e))
+print(e == "")

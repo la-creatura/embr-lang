@@ -1,0 +1,90 @@
+# closures: counters that share a variable, function values as arguments, a nested recursive fn, a loop variable
+import "embrlib"
+fn make_counter() -> fn() -> int
+    n = 0
+    return fn() -> int
+        n = n + 1
+        return n
+    end
+end
+c = make_counter()
+c()
+print(c())
+d = make_counter()
+print(d())
+print(c())
+
+fn apply(f: fn(int) -> int, x: int) -> int
+    return f(x)
+end
+double = fn(x: int) -> int
+    return x * 2
+end
+print(apply(double, 21))
+fn sq(x: int) -> int
+    return x * x
+end
+print(apply(sq, 7))
+
+fn adder(k: int) -> fn(int) -> int
+    return fn(x: int) -> int
+        return x + k
+    end
+end
+add5 = adder(5)
+print(add5(10))
+print(adder(1)(2))
+
+fn siblings() -> int
+    count = 0
+    inc = fn()
+        count = count + 1
+    end
+    get = fn() -> int
+        return count
+    end
+    inc()
+    inc()
+    return get()
+end
+print(siblings())
+
+fn fact_of(n: int) -> int
+    fn fact(k: int) -> int
+        if k < 2
+            return 1
+        end
+        return k * fact(k - 1)
+    end
+    return fact(n)
+end
+print(fact_of(10))
+
+fn loop_caps() -> int
+    total = 0
+    for i in [1...3]
+        add = fn() -> int
+            return i * 10
+        end
+        total = total + add()
+    end
+    return total
+end
+print(loop_caps())
+
+fn greeter(name: str) -> fn(str) -> str
+    return fn(g: str) -> str
+        return g + ", " + name
+    end
+end
+hello = greeter("bob")
+print(hello("hi"))
+words = ["a", "b"]
+fn count_words(ws: arr<str>) -> fn() -> int
+    return fn() -> int
+        return len(ws)
+    end
+end
+cw = count_words(words)
+words = push(words, "c")
+print(cw())

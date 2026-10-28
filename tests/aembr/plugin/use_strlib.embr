@@ -1,0 +1,46 @@
+import "embrlib"
+import "@LIB@"
+print(greeting())
+print(nth_prime(3))
+print(weight("b"))
+print(shout("hey"))
+print(repeat("ab", 3))
+print(total([1, 2, 3, 4]))
+print(join(tags(["a", "bb", "ccc"]), ","))
+xs = halves([1.0, 5.0, 2.5])
+print(xs[0] + xs[1] + xs[2])
+print(len(evens([1, 2, 3, 4, 5, 6])))
+print(evens([1, 2, 3, 4, 5, 6])[2])
+print(join(tags([]), "-") == "")
+print(total(lengths(["x", "yy", "zzz"])))
+c = count_words(["a", "b", "a", "c", "a"])
+print(c["a"] + c["b"] + c["c"])
+print(len(c))
+print(lookup(c, "a"))
+s = shout_all({"k": "v", "j": "w"})
+print(s["k"] + s["j"])
+print(scale({"x": 1.5}, 2.0)["x"])
+try
+    first([])
+catch e
+    print(e["message"])
+end
+try
+    lookup(c, "zz")
+catch e
+    print(e["message"])
+end
+try
+    total(["a"])
+catch e
+    print("rejected")
+end
+try
+    must_be_positive(0)
+catch e
+    print(e["kind"], e["message"])
+end
+print(must_be_positive(4))
+print(total([1...100000]))
+print(total(count_to(100000)))
+print(len(count_to(250000)))

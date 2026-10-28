@@ -2,18 +2,43 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "embr",
   "scopeName": "source.embr",
-  "fileTypes": ["embr"],
+  "fileTypes": [
+    "embr"
+  ],
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#strings" },
-    { "include": "#numbers" },
-    { "include": "#fn-definition" },
-    { "include": "#type-annotation" },
-    { "include": "#keywords" },
-    { "include": "#constants" },
-    { "include": "#function-call" },
-    { "include": "#operators" },
-    { "include": "#punctuation" }
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#raw-strings"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#fn-definition"
+    },
+    {
+      "include": "#type-annotation"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
   ],
   "repository": {
     "comments": {
@@ -22,13 +47,25 @@
           "name": "comment.block.embr",
           "begin": "#\\[",
           "end": "\\]#",
-          "beginCaptures": { "0": { "name": "punctuation.definition.comment.begin.embr" } },
-          "endCaptures":   { "0": { "name": "punctuation.definition.comment.end.embr" } }
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.embr"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.embr"
+            }
+          }
         },
         {
           "name": "comment.line.number-sign.embr",
           "match": "(#)(?!\\[).*$",
-          "captures": { "1": { "name": "punctuation.definition.comment.embr" } }
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.embr"
+            }
+          }
         }
       ]
     },
@@ -36,65 +73,132 @@
       "name": "string.quoted.double.embr",
       "begin": "\"",
       "end": "\"|$",
-      "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.embr" } },
-      "endCaptures":   { "0": { "name": "punctuation.definition.string.end.embr" } },
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.embr"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.embr"
+        }
+      },
       "patterns": [
-        { "name": "constant.character.escape.embr",  "match": "\\\\(?:[ntr0\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]{1,6}\\})" },
-        { "name": "invalid.illegal.unknown-escape.embr", "match": "\\\\." }
+        {
+          "name": "constant.character.escape.embr",
+          "match": "\\\\(?:[ntr0\"\\\\]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]{1,6}\\})"
+        },
+        {
+          "name": "invalid.illegal.unknown-escape.embr",
+          "match": "\\\\."
+        }
       ]
     },
     "numbers": {
       "patterns": [
-        { "name": "constant.numeric.float.embr",   "match": "(?<![\\w.])\\d+(?:\\.\\d+)?[eE][+-]?\\d+(?![\\w.])" },
-        { "name": "constant.numeric.float.embr",   "match": "(?<![\\w.])\\d+\\.\\d+(?![\\w.])" },
-        { "name": "constant.numeric.integer.embr", "match": "(?<![\\w.])\\d+(?![\\w.])" },
-        { "name": "invalid.illegal.number.embr",   "match": "(?<![\\w.])\\d+\\.(?!\\d)|\\d+\\.\\d+\\.[\\d.]*" }
+        {
+          "name": "constant.numeric.integer.embr",
+          "match": "(?<![\\w.])0(?:[xX][0-9a-fA-F]+|[bB][01]+)(?![\\w.])"
+        },
+        {
+          "name": "constant.numeric.float.embr",
+          "match": "(?<![\\w.])\\d+(?:\\.\\d+)?[eE][+-]?\\d+(?![\\w.])"
+        },
+        {
+          "name": "constant.numeric.float.embr",
+          "match": "(?<![\\w.])\\d+\\.\\d+(?![\\w.])"
+        },
+        {
+          "name": "constant.numeric.integer.embr",
+          "match": "(?<![\\w.])\\d+(?![\\w.])"
+        },
+        {
+          "name": "invalid.illegal.number.embr",
+          "match": "(?<![\\w.])\\d+\\.(?!\\d)|\\d+\\.\\d+\\.[\\d.]*"
+        }
       ]
     },
     "fn-definition": {
       "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
-        "1": { "name": "storage.type.function.embr" },
-        "2": { "name": "entity.name.function.embr" }
+        "1": {
+          "name": "storage.type.function.embr"
+        },
+        "2": {
+          "name": "entity.name.function.embr"
+        }
       }
     },
     "type-annotation": {
       "patterns": [
         {
           "comment": "x: num  /  a: int  (parameter and local annotations)",
-          "match": "(:)\\s*\\b(int|num|str|arr|map|fn|ptr|any)\\b",
+          "match": "(:)\\s*\\b(int|num|str|arr|map|fn|ptr|any|host)\\b",
           "captures": {
-            "1": { "name": "punctuation.separator.annotation.embr" },
-            "2": { "name": "support.type.embr" }
+            "1": {
+              "name": "punctuation.separator.annotation.embr"
+            },
+            "2": {
+              "name": "support.type.embr"
+            }
           }
         },
         {
           "comment": "-> num  (return type)",
-          "match": "(->)\\s*\\b(int|num|str|arr|map|fn|ptr|any)\\b",
+          "match": "(->)\\s*\\b(int|num|str|arr|map|fn|ptr|any|host)\\b",
           "captures": {
-            "1": { "name": "keyword.operator.arrow.embr" },
-            "2": { "name": "support.type.embr" }
+            "1": {
+              "name": "keyword.operator.arrow.embr"
+            },
+            "2": {
+              "name": "support.type.embr"
+            }
           }
         },
         {
           "comment": "local int x = 5",
-          "match": "\\b(local)\\s+(int|num|str|arr|map|fn|ptr|any)\\b",
+          "match": "\\b(local)\\s+(int|num|str|arr|map|fn|ptr|any|host)\\b",
           "captures": {
-            "1": { "name": "storage.modifier.embr" },
-            "2": { "name": "support.type.embr" }
+            "1": {
+              "name": "storage.modifier.embr"
+            },
+            "2": {
+              "name": "support.type.embr"
+            }
           }
         }
       ]
     },
     "keywords": {
       "patterns": [
-        { "name": "keyword.control.conditional.embr", "match": "\\b(if|elif|else)\\b" },
-        { "name": "keyword.control.loop.embr",        "match": "\\b(while|for|in|break|continue)\\b" },
-        { "name": "keyword.control.flow.embr",        "match": "\\b(return|try|catch|end)\\b" },
-        { "name": "keyword.control.import.embr",      "match": "\\bimport\\b" },
-        { "name": "storage.type.function.embr",       "match": "\\bfn\\b" },
-        { "name": "storage.modifier.embr",            "match": "\\b(local|const)\\b" },
-        { "name": "keyword.operator.logical.embr",    "match": "\\b(and|or)\\b" }
+        {
+          "name": "keyword.control.conditional.embr",
+          "match": "\\b(if|elif|else)\\b"
+        },
+        {
+          "name": "keyword.control.loop.embr",
+          "match": "\\b(while|for|in|break|continue)\\b"
+        },
+        {
+          "name": "keyword.control.flow.embr",
+          "match": "\\b(return|try|catch|end)\\b"
+        },
+        {
+          "name": "keyword.control.import.embr",
+          "match": "\\bimport\\b"
+        },
+        {
+          "name": "storage.type.function.embr",
+          "match": "\\bfn\\b"
+        },
+        {
+          "name": "storage.modifier.embr",
+          "match": "\\b(local|const)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.embr",
+          "match": "\\b(and|or)\\b"
+        }
       ]
     },
     "constants": {
@@ -108,21 +212,76 @@
     },
     "operators": {
       "patterns": [
-        { "name": "keyword.operator.assignment.compound.embr", "match": "\\+=|-=|\\*=|/=" },
-        { "name": "keyword.operator.bitwise.embr",             "match": "<<|[|^~]" },
-        { "name": "keyword.operator.comparison.embr",          "match": "==|!=|<=|>=|<|>" },
-        { "name": "keyword.operator.spread.embr",              "match": "\\.\\.\\." },
-        { "name": "invalid.illegal.range.embr",                "match": "(?<!\\.)\\.\\.(?!\\.)" },
-        { "name": "keyword.operator.assignment.embr",          "match": "=" },
-        { "name": "keyword.operator.arithmetic.embr",          "match": "[-+*/%]" },
-        { "name": "keyword.operator.logical.embr",             "match": "!" }
+        {
+          "name": "keyword.operator.assignment.compound.embr",
+          "match": "\\+=|-=|\\*=|/="
+        },
+        {
+          "name": "keyword.operator.bitwise.embr",
+          "match": "<<|[|^~]"
+        },
+        {
+          "name": "keyword.operator.comparison.embr",
+          "match": "==|!=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.spread.embr",
+          "match": "\\.\\.\\."
+        },
+        {
+          "name": "invalid.illegal.range.embr",
+          "match": "(?<!\\.)\\.\\.(?!\\.)"
+        },
+        {
+          "name": "keyword.operator.assignment.embr",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.arithmetic.embr",
+          "match": "[-+*/%]"
+        },
+        {
+          "name": "keyword.operator.logical.embr",
+          "match": "!"
+        }
       ]
     },
     "punctuation": {
       "patterns": [
-        { "name": "punctuation.accessor.embr",  "match": "\\." },
-        { "name": "punctuation.separator.comma.embr", "match": "," },
-        { "name": "punctuation.separator.key-value.embr", "match": ":" }
+        {
+          "name": "punctuation.accessor.embr",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.separator.comma.embr",
+          "match": ","
+        },
+        {
+          "name": "punctuation.separator.key-value.embr",
+          "match": ":"
+        }
+      ]
+    },
+    "raw-strings": {
+      "comment": "c \"\"\" ... \"\"\" : C text for aembr (the compiler); nothing in it is an escape",
+      "name": "string.quoted.triple.embr",
+      "begin": "\"\"\"",
+      "end": "\"\"\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.embr"
+        }
+      },
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.embr"
+        }
+      },
+      "patterns": [
+        {
+          "name": "variable.other.embr",
+          "match": "\\$(?:\\$|[A-Za-z_][A-Za-z0-9_]*)"
+        }
       ]
     }
   }

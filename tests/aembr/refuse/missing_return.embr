@@ -1,0 +1,7 @@
+# refuse: can reach its end without a return
+fn f(a: int) -> int
+    if a
+        return 1
+    end
+end
+print(f(1))

@@ -1,0 +1,19 @@
+# a function that returns a function, and a function written inside another one, with their result types worked out
+fn make_counter()
+    n = 0
+    return fn()
+        n = n + 1
+        return n
+    end
+end
+fn make_adder(k: int) -> fn(int) -> int
+    return fn(x: int)
+        return x + k
+    end
+end
+c = make_counter()
+c()
+c()
+print(c())
+add5 = make_adder(5)
+print(add5(10))

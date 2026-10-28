@@ -1,0 +1,5 @@
+# refuse: the array holds
+xs = []
+xs = push(xs, 1)
+xs = push(xs, "a")
+print(1)

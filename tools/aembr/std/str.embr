@@ -1,0 +1,280 @@
+# std/str.embr: the natives of the `str` plugin, written in aembr. `import "str"` brings this file in before the statements of the file that imports it
+# (front.cpp), so a call to one of these is a call of an ordinary function. what is not here is still done by the compiler (natives.h).
+#
+# good to know
+#   - C text here needs no `native` capability: this is part of the compiler
+#   - the functions have no frame in a stack trace, as the natives have none in the VM. an error has the kind of the native and the line of the call
+#     (rt_raise with line 0: the call site fills it in)
+import "embrlib"
+
+c file """
+#include <ctype.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+void* memmem(const void*, size_t, const void*, size_t);
+#define STD_MAX_ALLOC (INT64_C(256) * 1024 * 1024)
+
+static EmbrArr* std_push_new(EmbrArr* a, EmbrStr* s) { a = rt_arr_push_str(a, s); rt_release_str(s); return a; }
+static int std_is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'; }
+static EmbrStr* std_trimmed(const EmbrStr* s, int left, int right) {
+    int64_t a = 0, b = s->len;
+    if (left) while (a < b && std_is_space(s->data[a])) ++a;
+    if (right) while (b > a && std_is_space(s->data[b - 1])) --b;
+    return rt_str_from(s->data + a, b - a);
+}
+static int64_t std_find(const EmbrStr* s, const EmbrStr* sub, int64_t start) {
+    if (start < 0) start = 0;
+    if (start > s->len) return -1;
+    if (sub->len == 0) return start;
+    const char* at = memmem(s->data + start, (size_t)(s->len - start), sub->data, (size_t)sub->len);
+    return at ? at - s->data : -1;
+}
+static EmbrStr* std_pad(RtCtx* cx, const char* kind, const EmbrStr* s, int64_t width, const EmbrStr* ch, int left) {
+    if (ch->len != 1) { rt_raise(cx, kind, 0, "pad char must be a single character"); return NULL; }
+    if (s->len >= width) return rt_retain_str((EmbrStr*)s);
+    if (width < 0 || width > STD_MAX_ALLOC) {
+        rt_raise(cx, kind, 0, "width (%lld) exceeds the limit of %lld elements/bytes", (long long)width, (long long)STD_MAX_ALLOC);
+        return NULL;
+    }
+    EmbrStr* r = rt_str_alloc(width);
+    const int64_t fill = width - s->len;
+    memset(r->data + (left ? 0 : s->len), ch->data[0], (size_t)fill);
+    memcpy(r->data + (left ? fill : 0), s->data, (size_t)s->len);
+    return r;
+}
+"""
+
+fn str_split(s: str, sep: str) -> arr<str>
+    local arr<str> r = []
+    c """
+        EmbrArr* a = rt_arr_new(2, 4);
+        if ($sep->len == 0) {
+            for (int64_t i = 0; i < $s->len; ++i) a = std_push_new(a, rt_str_from($s->data + i, 1));
+        } else {
+            const char* p = $s->data;
+            const char* end = $s->data + $s->len;
+            for (;;) {
+                const char* at = memmem(p, (size_t)(end - p), $sep->data, (size_t)$sep->len);
+                if (!at) break;
+                a = std_push_new(a, rt_str_from(p, at - p));
+                p = at + $sep->len;
+            }
+            a = std_push_new(a, rt_str_from(p, end - p));
+        }
+        rt_own_arr(&$r, a);
+    """
+    return r
+end
+
+fn str_replace(s: str, old: str, new: str) -> str
+    r = ""
+    c """
+        if ($old->len == 0) { rt_raise(cx, "str_replace", 0, "'old' cannot be empty"); }
+        else {
+            int64_t cap = $s->len + 16, n = 0;
+            char* out = rt_xalloc((size_t)cap);
+            const char* p = $s->data;
+            const char* end = $s->data + $s->len;
+            for (;;) {
+                const char* at = memmem(p, (size_t)(end - p), $old->data, (size_t)$old->len);
+                const char* stop = at ? at : end;
+                const int64_t need = n + (stop - p) + (at ? $new->len : 0);
+                if (need > cap) { cap = need * 2; out = realloc(out, (size_t)cap); if (!out) { fputs("error: out of memory\n", stderr); exit(1); } }
+                memcpy(out + n, p, (size_t)(stop - p)); n += stop - p;
+                if (!at) break;
+                memcpy(out + n, $new->data, (size_t)$new->len); n += $new->len;
+                p = at + $old->len;
+            }
+            rt_own_str(&$r, rt_str_from(out, n));
+            free(out);
+        }
+    """
+    return r
+end
+
+fn str_strip(s: str) -> str
+    r = ""
+    c """
+        rt_own_str(&$r, std_trimmed($s, 1, 1));
+    """
+    return r
+end
+
+fn str_ltrim(s: str) -> str
+    r = ""
+    c """
+        rt_own_str(&$r, std_trimmed($s, 1, 0));
+    """
+    return r
+end
+
+fn str_rtrim(s: str) -> str
+    r = ""
+    c """
+        rt_own_str(&$r, std_trimmed($s, 0, 1));
+    """
+    return r
+end
+
+fn str_lower(s: str) -> str
+    r = ""
+    c """
+        EmbrStr* t = rt_str_alloc($s->len);
+        for (int64_t i = 0; i < $s->len; ++i) t->data[i] = (char)tolower((unsigned char)$s->data[i]);
+        rt_own_str(&$r, t);
+    """
+    return r
+end
+
+fn str_upper(s: str) -> str
+    r = ""
+    c """
+        EmbrStr* t = rt_str_alloc($s->len);
+        for (int64_t i = 0; i < $s->len; ++i) t->data[i] = (char)toupper((unsigned char)$s->data[i]);
+        rt_own_str(&$r, t);
+    """
+    return r
+end
+
+fn str_find(s: str, sub: str, start: int = 0) -> int
+    r = 0
+    c """
+        $r = std_find($s, $sub, $start);
+    """
+    return r
+end
+
+fn str_startswith(s: str, p: str) -> int
+    r = 0
+    c """
+        $r = $s->len >= $p->len && memcmp($s->data, $p->data, (size_t)$p->len) == 0;
+    """
+    return r
+end
+
+fn str_endswith(s: str, p: str) -> int
+    r = 0
+    c """
+        $r = $s->len >= $p->len && memcmp($s->data + $s->len - $p->len, $p->data, (size_t)$p->len) == 0;
+    """
+    return r
+end
+
+fn str_isdigit(s: str) -> int
+    r = 0
+    c """
+        $r = $s->len > 0;
+        for (int64_t i = 0; $r && i < $s->len; ++i) if (!isdigit((unsigned char)$s->data[i])) $r = 0;
+    """
+    return r
+end
+
+fn str_isalpha(s: str) -> int
+    r = 0
+    c """
+        $r = $s->len > 0;
+        for (int64_t i = 0; $r && i < $s->len; ++i) if (!isalpha((unsigned char)$s->data[i])) $r = 0;
+    """
+    return r
+end
+
+fn str_isalnum(s: str) -> int
+    r = 0
+    c """
+        $r = $s->len > 0;
+        for (int64_t i = 0; $r && i < $s->len; ++i) if (!isalnum((unsigned char)$s->data[i])) $r = 0;
+    """
+    return r
+end
+
+fn str_count(s: str, sub: str) -> int
+    n = 0
+    c """
+        if ($sub->len != 0) {
+            const char* p = $s->data;
+            const char* end = $s->data + $s->len;
+            for (;;) {
+                const char* at = memmem(p, (size_t)(end - p), $sub->data, (size_t)$sub->len);
+                if (!at) break;
+                ++$n;
+                p = at + $sub->len;
+            }
+        }
+    """
+    return n
+end
+
+fn str_ord(s: str) -> int
+    r = 0
+    c """
+        if ($s->len == 0) rt_raise(cx, "str_ord", 0, "empty string");
+        else $r = (unsigned char)$s->data[0];
+    """
+    return r
+end
+
+fn str_chr(code: int) -> str
+    r = ""
+    c """
+        if ($code < 0 || $code > 255) rt_raise(cx, "str_chr", 0, "code point out of range (0-255)");
+        else { char ch = (char)$code; rt_own_str(&$r, rt_str_from(&ch, 1)); }
+    """
+    return r
+end
+
+fn str_repeat(s: str, n: int) -> str
+    r = ""
+    c """
+        if ($n < 0) rt_raise(cx, "str_repeat", 0, "count must not be negative");
+        else if ($s->len != 0 && $n > STD_MAX_ALLOC / $s->len)
+            rt_raise(cx, "str_repeat", 0, "result would exceed the limit of %lld bytes", (long long)STD_MAX_ALLOC);
+        else if ($s->len != 0) {
+            EmbrStr* t = rt_str_alloc($s->len * $n);
+            for (int64_t i = 0; i < $n; ++i) memcpy(t->data + i * $s->len, $s->data, (size_t)$s->len);
+            rt_own_str(&$r, t);
+        }
+    """
+    return r
+end
+
+fn str_reverse(s: str) -> str
+    r = ""
+    c """
+        EmbrStr* t = rt_str_alloc($s->len);
+        for (int64_t i = 0; i < $s->len; ++i) t->data[i] = $s->data[$s->len - 1 - i];
+        rt_own_str(&$r, t);
+    """
+    return r
+end
+
+fn str_pad_left(s: str, width: int, fill: str = " ") -> str
+    r = ""
+    c """
+        EmbrStr* t = std_pad(cx, "str_pad_left", $s, $width, $fill, 1);
+        if (t) rt_own_str(&$r, t);
+    """
+    return r
+end
+
+fn str_pad_right(s: str, width: int, fill: str = " ") -> str
+    r = ""
+    c """
+        EmbrStr* t = std_pad(cx, "str_pad_right", $s, $width, $fill, 0);
+        if (t) rt_own_str(&$r, t);
+    """
+    return r
+end
+
+fn num_fixed(x: num, digits: int) -> str
+    r = ""
+    c """
+        if ($digits < 0 || $digits > 100) rt_raise(cx, "num_fixed", 0, "digits must be between 0 and 100");
+        else {
+            char buf[600];
+            const int n = snprintf(buf, sizeof buf, "%.*f", (int)$digits, $x);
+            rt_own_str(&$r, rt_str_from(buf, n > 0 && n < (int)sizeof buf ? n : 0));
+        }
+    """
+    return r
+end

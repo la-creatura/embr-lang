@@ -1,0 +1,79 @@
+import "embrlib"
+# arrays and maps that hold arrays and maps
+fn make_grid(n: int) -> arr<arr<int>>
+    grid = []
+    i = 0
+    while i < n
+        row = []
+        j = 0
+        while j < n
+            append(&row, i * n + j)
+            j += 1
+        end
+        append(&grid, row)
+        i += 1
+    end
+    return grid
+end
+
+fn sum_grid(g: arr<arr<int>>) -> int
+    t = 0
+    for row in g
+        for x in row
+            t = t + x
+        end
+    end
+    return t
+end
+
+grid = make_grid(4)
+print(sum_grid(grid))
+print(grid[2][3])
+grid[2][3] = 100
+print(grid[2][3])
+print(sum_grid(grid))
+
+# a copy is not changed by a change to the original (the rows are shared until one is written)
+copy = grid
+grid[0][0] = -5
+print(copy[0][0])
+print(grid[0][0])
+append(&grid[1], 77)
+print(len(grid[1]))
+print(len(copy[1]))
+
+# literals, and a map of arrays
+words = {"a": ["x", "y"], "b": ["z"]}
+print(len(words["a"]))
+words["b"][0] = "w"
+append(&words["a"], "q")
+print(words["b"][0])
+print(len(words["a"]))
+print(words["a"][2])
+names = keys(words)
+print(len(names))
+
+# arrays of maps and maps of maps
+people = [{"age": 30, "n": 1}, {"age": 41, "n": 2}]
+people[1]["age"] = 42
+append(&people, {"age": 5, "n": 3})
+total = 0
+for p in people
+    total = total + p["age"]
+end
+print(total)
+deep = {"x": {"y": [1, 2, 3]}}
+deep["x"]["y"][1] = 20
+print(deep["x"]["y"][1])
+print(len(deep["x"]["y"]))
+
+# a matrix of floats, built from a literal
+m = [[1.5, 2.5], [3.5, 4.5]]
+m[1][0] = m[0][1] * 2.0
+print(m[1][0])
+rows = [[1, 2], [3]]
+last = remove_last(&rows)
+print(len(rows))
+print(last[0])
+insert(&rows, 0, [9, 9, 9])
+print(rows[0][2])

@@ -1,0 +1,5 @@
+# refuse: is a function without its type
+fn apply(f: func, x: int) -> int
+    return x
+end
+print(1)

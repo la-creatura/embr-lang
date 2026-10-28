@@ -1,0 +1,5 @@
+# a plugin call whose result type the plugin does not fix is fine when the result is dropped
+import "embrlib"
+import "json"
+json_parse("[1, 2]")
+print(1)

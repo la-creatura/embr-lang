@@ -1,0 +1,24 @@
+# the natives of embrmath that compile
+import "embrlib"
+import "embrmath"
+fn show_error(f: fn())
+    try
+        f()
+    catch e
+        print(e["kind"] + ": " + e["message"])
+    end
+end
+
+print(math_sqrt(16), math_sqrt(2), math_sqrt(2.25), math_pow(2, 10), math_pow(2.0, 0.5))
+print(math_sin(0), math_cos(0), math_tan(0), math_asin(1) * 2, math_acos(1), math_atan(1) * 4, math_atan2(1, 1) * 4)
+print(math_log(1), math_log2(8), math_log10(1000), math_exp(0), math_exp(1))
+print(math_abs(-5), math_abs(5), math_abs(-2.5), math_abs(0.0))
+show_error(fn() math_abs(0 - 9223372036854775807 - 1) end)
+print(math_floor(3.7), math_floor(-3.2), math_floor(4), math_ceil(3.2), math_ceil(-3.7), math_ceil(4), math_round(2.5), math_round(-2.5), math_round(2.4), math_round(7))
+print(math_min(3, 7), math_max(3, 7), math_min(1.5, -2.5), math_max(1.5, -2.5))
+print(math_clamp(12, 0, 10), math_clamp(-3, 0, 10), math_clamp(5, 0, 10), math_clamp(1.5, 0.0, 1.0), math_clamp(0.5, 0.0, 1.0))
+show_error(fn() math_clamp(5, 10, 0) end)
+show_error(fn() math_clamp(5.0, 2.5, 1.0) end)
+print(PI * 2, E)
+print(math_sqrt(0 - 1) == math_sqrt(0 - 1), math_sqrt(0 - 1) != math_sqrt(0 - 1))
+print(math_log(0) < 0, math_exp(1000) > 1000)

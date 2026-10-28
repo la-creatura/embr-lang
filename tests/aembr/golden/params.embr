@@ -1,0 +1,47 @@
+# optional and in-out parameters: only aembr runs these, the VM refuses them
+import "embrlib"
+fn scale(x: int, by: int = 3, add: float = 0.5) -> float
+    return x * by + add
+end
+
+fn greet(name: str, mark: str = "!") -> str
+    return "hi " + name + mark
+end
+
+fn bump(&n: int, by: int = 1)
+    n = n + by
+end
+
+fn fill(&list: arr<int>, count: int)
+    for i in [0...count - 1]
+        append(&list, i * i)
+    end
+end
+
+fn rename(&s: str)
+    s = s + "!"
+end
+
+fn twice(&n: int)
+    bump(&n)
+    bump(&n, 10)
+end
+
+print(scale(2))
+print(scale(2, 5))
+print(scale(2, 5, 1.0))
+print(greet("ann"))
+print(greet("bob", "?"))
+local c = 0
+bump(&c)
+bump(&c, 5)
+print(c)
+twice(&c)
+print(c)
+local xs = [7]
+fill(&xs, 4)
+print(xs)
+local w = "wow"
+rename(&w)
+rename(&w)
+print(w)

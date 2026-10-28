@@ -1,0 +1,260 @@
+# acsv: the csv plugin (RFC 4180 with a few documented leniencies) written in aembr. the scan of a text and the writing of rows are C blocks over
+# the bytes; the aembr part checks the delimiter and raises the errors. import "acsv" gives the same functions as import "csv", for text and cells
+# that are strings or numbers.
+import "embrlib"
+
+
+__module__ = {
+    "version": "1.0.0",
+    "description": "CSV parse and stringify, written in aembr",
+    "capabilities": ["native"],
+}
+
+c file """
+#include <stdio.h>
+#include <inttypes.h>
+typedef struct { char* p; size_t n, cap; } AeBuf;
+static void ae_put(AeBuf* b, const char* s, size_t n) {
+    if (b->n + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 256;
+        while (cap < b->n + n + 1) cap *= 2;
+        char* q = realloc(b->p, cap);
+        if (!q) { fputs("error: out of memory\\n", stderr); exit(1); }
+        b->p = q; b->cap = cap;
+    }
+    memcpy(b->p + b->n, s, n);
+    b->n += n;
+}
+static void ae_put1(AeBuf* b, char c) { ae_put(b, &c, 1); }
+
+/* the records of a text, as an array of arrays of strings, or with `h` written straight into the host's slot `out` (then NULL is given back when it worked). err: 0 fine, 1 a character after a closing quote, 2 a quote inside an unquoted field, 3 a quoted field never closed */
+static EmbrArr* ae_csv_parse(const EmbrStr* tx, int delim, int64_t* err, int64_t* eline, int64_t* ecol, EmbrCtx* h, EmbrValue* out) {
+    const unsigned char* s = (const unsigned char*)tx->data;
+    int64_t n = tx->len, i = 0;
+    if (n >= 3 && s[0] == 239 && s[1] == 187 && s[2] == 191) i = 3;
+    int64_t line = 1, line_start = i, qline = 0, qcol = 0;
+    EmbrArr* rows = h ? NULL : rt_arr_new(3, 16);
+    EmbrArr* row = h ? NULL : rt_arr_new(2, 8);
+    EmbrValue* ht = NULL;
+    if (h) { if (embrp_set_array(h, out, 0)) { *err = 4; return NULL; } ht = embrp_temp(h); if (embrp_set_array(h, ht, 0)) { *err = 4; return NULL; } }
+    AeBuf f = {0, 0, 0};
+    int in_q = 0, after_q = 0, field_start = 1, row_started = 0;
+    *err = 0;
+#define AE_FIELD() do { \
+        if (h) { if (embrp_array_push_str(h, ht, f.p ? f.p : "", f.n)) { *err = 4; goto done; } } \
+        else { EmbrStr* fs = rt_str_from(f.p ? f.p : "", (int64_t)f.n); row = rt_arr_push_str(row, fs); rt_release_str(fs); } \
+        f.n = 0; } while (0)
+#define AE_ROW() do { \
+        if (h) { if (embrp_array_push(h, out, ht) || embrp_set_array(h, ht, 0)) { *err = 4; goto done; } } \
+        else { rows = rt_arr_push_arr(rows, row); rt_release_arr(row); row = rt_arr_new(2, 8); } } while (0)
+    while (i < n) {
+        int c = s[i];
+        if (in_q) {
+            if (c == '"') {
+                if (i + 1 < n && s[i + 1] == '"') { ae_put1(&f, '"'); i += 2; continue; }
+                in_q = 0; after_q = 1; i++; continue;
+            }
+            if (c == 10) { line++; line_start = i + 1; }
+            ae_put1(&f, (char)c); i++; continue;
+        }
+        if (c == 13 || c == 10) {
+            int size = (c == 13 && i + 1 < n && s[i + 1] == 10) ? 2 : 1;
+            if (row_started) { AE_FIELD(); AE_ROW(); field_start = 1; after_q = 0; row_started = 0; }
+            i += size; line++; line_start = i; continue;
+        }
+        if (after_q && c != delim) { *err = 1; *eline = line; *ecol = i - line_start + 1; goto done; }
+        if (c == delim) { AE_FIELD(); field_start = 1; after_q = 0; row_started = 1; i++; continue; }
+        if (c == '"') {
+            if (!field_start) { *err = 2; *eline = line; *ecol = i - line_start + 1; goto done; }
+            qline = line; qcol = i - line_start + 1;
+            in_q = 1; field_start = 0; row_started = 1; i++; continue;
+        }
+        ae_put1(&f, (char)c); field_start = 0; row_started = 1; i++;
+    }
+    if (in_q) { *err = 3; *eline = qline; *ecol = qcol; goto done; }
+    if (row_started) { AE_FIELD(); AE_ROW(); }
+done:
+    free(f.p);
+    rt_release_arr(row);
+    if (*err) { rt_release_arr(rows); return NULL; }
+    return rows;
+}
+
+/* the text of the rows (a host array of host arrays), or NULL after raising when a row is no array or a cell is not a string or a number */
+static EmbrStr* ae_csv_write(RtCtx* cx, EmbrCtx* h, const EmbrValue* rows, int delim) {
+    AeBuf b = {0, 0, 0};
+    size_t nrows = embrp_type(h, rows) == EMBR_TAG_ARRAY ? embrp_array_len(h, rows) : 0;
+    if (embrp_type(h, rows) != EMBR_TAG_ARRAY) { rt_raise_dyn_kind(cx, "csv_stringify", 0, "rows must be an array of arrays"); return NULL; }
+    for (size_t r = 0; r < nrows; ++r) {
+        const EmbrValue* row = embrp_array_at(h, rows, r);
+        if (embrp_type(h, row) != EMBR_TAG_ARRAY) {
+            char msg[120];
+            snprintf(msg, sizeof msg, "row %zu must be an array, got %s", r, embrp_type_name(h, row));
+            rt_raise_dyn_kind(cx, "csv_stringify", 0, msg);
+            free(b.p);
+            return NULL;
+        }
+        size_t ncells = embrp_array_len(h, row);
+        for (size_t c = 0; c < ncells; ++c) {
+            if (c > 0) ae_put1(&b, (char)delim);
+            const EmbrValue* v = embrp_array_at(h, row, c);
+            char num[64];
+            const char* t = NULL;
+            int64_t tn = 0;
+            switch (embrp_type(h, v)) {
+            case EMBR_TAG_STRING: { size_t n; t = embrp_str(h, v, &n); tn = (int64_t)n; break; }
+            case EMBR_TAG_INT: tn = snprintf(num, sizeof num, "%" PRId64, v->u.i); t = num; break;
+            case EMBR_TAG_FLOAT: rt_fmt_f64(num, sizeof num, v->u.d); tn = (int64_t)strlen(num); t = num; break;
+            default: {
+                char msg[200];
+                snprintf(msg, sizeof msg, "cell [%zu][%zu] must be a string or number, got %s", r, c, embrp_type_name(h, v));
+                rt_raise_dyn_kind(cx, "csv_stringify", 0, msg);
+                free(b.p);
+                return NULL;
+            }
+            }
+            int quote = (tn == 0 && ncells == 1) || (tn > 0 && (t[0] == ' ' || t[tn - 1] == ' '));
+            for (int64_t k = 0; !quote && k < tn; ++k)
+                if (t[k] == '"' || t[k] == '\r' || t[k] == '\n' || (unsigned char)t[k] == (unsigned)delim) quote = 1;
+            if (!quote) { ae_put(&b, t, (size_t)tn); continue; }
+            ae_put1(&b, '"');
+            for (int64_t k = 0; k < tn; ++k) { if (t[k] == '"') ae_put1(&b, '"'); ae_put1(&b, t[k]); }
+            ae_put1(&b, '"');
+        }
+        ae_put1(&b, '\n');
+    }
+    EmbrStr* out = rt_str_from(b.p ? b.p : "", (int64_t)b.n);
+    free(b.p);
+    return out;
+}
+
+/* the records after the first, each a map from the names in the first */
+static int ae_dicts_out(EmbrCtx* h, EmbrValue* out, const EmbrArr* rows) {
+    if (embrp_set_array(h, out, rows->len > 1 ? (size_t)rows->len - 1 : 0)) return 1;
+    const EmbrArr* head = (const EmbrArr*)(intptr_t)rows->data[0];
+    EmbrValue* t = embrp_temp(h);
+    for (int64_t r = 1; r < rows->len; ++r) {
+        const EmbrArr* row = (const EmbrArr*)(intptr_t)rows->data[r];
+        if (embrp_set_map(h, t)) return 1;
+        for (int64_t c = 0; c < head->len; ++c) {
+            const EmbrStr* k = (const EmbrStr*)(intptr_t)head->data[c];
+            const EmbrStr* v = (const EmbrStr*)(intptr_t)row->data[c];
+            if (embrp_map_set_str(h, t, k->data, (size_t)k->len, v->data, (size_t)v->len)) return 1;
+        }
+        if (embrp_array_push(h, out, t)) return 1;
+    }
+    return 0;
+}
+"""
+
+const fn byte_at(s, i)
+    b = 0
+    c """
+        $b = (unsigned char)$s->data[$i];
+    """
+    return b
+end
+
+fn fail(kind: str, message: str)
+    c """
+        rt_raise_dyn_kind(cx, $kind->data, 0, $message->data);
+    """
+end
+
+fn check_delimiter(who: str, delimiter: str = ",") -> int
+    if len(delimiter) != 1
+        fail(who, "delimiter must be a single character other than '\"', CR or LF")
+    end
+    d = byte_at(delimiter, 0)
+    if d == 34 or d == 13 or d == 10
+        fail(who, "delimiter must be a single character other than '\"', CR or LF")
+    end
+    return d
+end
+
+fn fail_at(who: str, what: str, line: int, col: int)
+    fail(who, what + " at line " + str(line) + ", column " + str(col))
+end
+
+# what the scan says went wrong (0: nothing)
+fn scan_fail(who: str, err: int, eline: int, ecol: int)
+    if err == 1
+        fail_at(who, "unexpected character after closing quote", eline, ecol)
+    end
+    if err == 2
+        fail_at(who, "unexpected quote inside an unquoted field", eline, ecol)
+    end
+    if err == 3
+        fail_at(who, "unterminated quoted field opened", eline, ecol)
+    end
+    if err == 4
+        fail(who, "the host could not take the value (nested too deeply?)")
+    end
+end
+
+# the records of a text, each a list of strings. the scan is C: it reads the bytes once and makes the strings, and tells aembr where it failed
+fn parse_rows(who: str, text: str, delimiter: str = ",") -> arr<arr<str>>
+    delim = check_delimiter(who, delimiter)
+    local arr<arr<str>> rows = []
+    err = 0
+    eline = 0
+    ecol = 0
+    c """
+        EmbrArr* res = ae_csv_parse($text, (int)$delim, &$err, &$eline, &$ecol, NULL, NULL);
+        if (res) rt_own_arr(&$rows, res);
+    """
+    scan_fail(who, err, eline, ecol)
+    return rows
+end
+
+# csv_parse writes the records straight into the host's slot
+fn csv_parse(text: str, delimiter: str = ",") -> host
+    delim = check_delimiter("csv_parse", delimiter)
+    err = 0
+    eline = 0
+    ecol = 0
+    c """
+        ae_csv_parse($text, (int)$delim, &$err, &$eline, &$ecol, $ctx, $out);
+    """
+    scan_fail("csv_parse", err, eline, ecol)
+end
+
+fn csv_parse_dicts(text: str, delimiter: str = ",") -> host
+    rows = parse_rows("csv_parse_dicts", text, delimiter)
+    hn = 0
+    if len(rows) > 0
+        hn = len(rows[0])
+    end
+    i = 0
+    while i < hn
+        j = 0
+        while j < i
+            if rows[0][i] == rows[0][j]
+                fail("csv_parse_dicts", "duplicate header name '" + rows[0][i] + "'")
+            end
+            j += 1
+        end
+        i += 1
+    end
+    r = 1
+    while r < len(rows)
+        if len(rows[r]) != hn
+            fail("csv_parse_dicts", "record " + str(r) + " has " + str(len(rows[r])) + " fields, header has " + str(hn))
+        end
+        r += 1
+    end
+    c """
+        if ($rows->len == 0) { RT_HOST(cx, embrp_set_array($ctx, $out, 0)); }
+        else RT_HOST(cx, ae_dicts_out($ctx, $out, $rows));
+    """
+end
+
+fn csv_stringify(rows: host, delimiter: str = ",") -> str
+    d = check_delimiter("csv_stringify", delimiter)
+    out = ""
+    c """
+        EmbrStr* t = ae_csv_write(cx, $ctx, $rows, (int)$d);
+        if (t) rt_own_str(&$out, t);
+    """
+    return out
+end

@@ -1,0 +1,97 @@
+import "embrlib"
+import "json"
+# values of no fixed type: what json_parse gives, and arrays and maps that hold different types
+v = json_parse("[1, 2.5, \"a\", [1, 2], {\"k\": 3}, 0, \"\"]")
+print(v)
+print(len(v), type(v), type(v[0]), type(v[1]), type(v[2]), type(v[3]), type(v[4]))
+print(v[0] + v[1], v[2] + "x", v[2] + 1, v[0] * 3, v[1] / 2, 7 % v[0], v[0] - 5, -v[0], -v[1])
+print(v[0] == 1, v[0] == 1.0, v[2] == "a", v[0] == "1", v[3] == [1, 2], v[0] != 2)
+print(v[0] < v[1], v[1] >= 2.5, v[0] > 3)
+print(v[3][1], v[4]["k"], v[3][0] + v[4]["k"])
+print(str(v[3]), str(v[4]), str(v[1]))
+print(v[0] and v[2], v[5] or v[2], v[6] or "empty", v[5] and 9)
+print(!v[5], !v[0], !v[6])
+n = 0
+for x in v[3]
+    n += x
+end
+print(n)
+for c in v[2]
+    print(c)
+end
+
+# a mixed literal is an array of anys
+mixed = [1, "two", 3.5, [4], {"five": 5}]
+print(mixed, len(mixed))
+mixed[0] = "changed"
+mixed[1] = 2
+print(mixed)
+print(mixed[4]["five"] + mixed[1])
+rec = {"id": 7, "name": "seven", "tags": ["a", "b"], "ok": 1.5}
+rec["extra"] = [1, 2]
+rec["id"] = "id7"
+print(rec)
+print(keys(rec), has(rec, "name"), has(rec, "nope"), len(rec))
+print(values({"b": 1, "a": "x"}))
+
+# changing a value inside an any leaves other holders alone
+a = json_parse("[1, 2, 3]")
+b = a
+a[0] = 99
+push(a, 4)
+append(&a, 5)
+print(a, b)
+c = json_parse("{\"list\": [1, 2]}")
+d = c
+c["list"] = "gone"
+print(c, d)
+
+# casts to typed values, checked when it runs
+w = json_parse("[10, 20, 30]")
+total = 0
+i = 0
+while i < len(w)
+    local int x = w[i]
+    total += x
+    i += 1
+end
+print(total)
+fn double(n: int) -> int
+    return n * 2
+end
+print(double(w[1]))
+try
+    print(double(v[2]))
+catch e
+    print(e["message"])
+end
+try
+    print(v[2] - 1)
+catch e
+    print(e["message"], e["kind"])
+end
+try
+    print(v[9])
+catch e
+    print(e["message"])
+end
+try
+    print(v[4]["missing"])
+catch e
+    print(e["message"])
+end
+try
+    print(v[0][0])
+catch e
+    print(e["message"])
+end
+try
+    print(v[3] < 1)
+catch e
+    print(e["message"])
+end
+try
+    print(v[0] / 0)
+catch e
+    print(e["message"])
+end

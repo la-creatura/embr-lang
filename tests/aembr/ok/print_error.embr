@@ -1,0 +1,23 @@
+import "embrlib"
+# print(e) shows kind, line, message and the frames the error passed through. (the smoke test compares it with the VM's, file names aside)
+fn inner(n: int) -> int
+    if n > 1
+        error("too big")
+    end
+    return n
+end
+fn outer(n: int) -> int
+    return inner(n)
+end
+try
+    print(outer(1))
+    print(outer(5))
+catch e
+    print(e)
+    print(e["line"])
+end
+try
+    x = 1 / 0
+catch e2
+    print(e2)
+end

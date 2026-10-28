@@ -31,6 +31,18 @@ static Param pRest(std::string n, TypeSet m = TS::Any) { return Param::rest(std:
 // a pointer's __<tag>_call dunder itself, see resolveDunder() in core/registry.h), widening the signature is all it
 // needs. invoke() raises its own clear error for a pointer with no matching dunder
 static Param pFnOrPtr(std::string n) { return Param::req(std::move(n), TS::Fn|TS::Ptr); }
+// a callback with `arity` parameters of no particular type and a result of the type `ret`: the checker then tells a function of another arity, or
+// of a result that can never fit, before the script runs
+static Param pFnOf(std::string n, size_t arity, TypeSet ret = TS::Any) {
+    Param p = pFnOrPtr(std::move(n));
+    auto ann = std::make_shared<TypeAnn>();
+    ann->t = TS::Fn;
+    ann->isFn = true;
+    for (size_t i = 0; i < arity; ++i) ann->params.push_back(makeAnn(TS::Any, nullptr));
+    if (!ret.isAny()) ann->ret = makeAnn(ret, nullptr);
+    p.elem = ann;
+    return p;
+}
 
 // resolves v to itself if it's already Callable, or to the Callable behind its __<tag>_call dunder if v is a typed
 // pointer that opts into being called. shared by fn_arity/fn_name/fn_sig/is_native so all four treat anything callable
@@ -487,7 +499,7 @@ void registerEmbrLib(Interpreter& interp) {
     });
 
     // filter(arr: arr, pred: fn|ptr) -> arr
-    interp.bindSpan("filter", {pArr("arr"), pFnOrPtr("pred")},
+    interp.bindSpan("filter", {pArr("arr"), pFnOf("pred", 1)},
     [&interp](const ArgSpan& args) -> Value {
         Value::array_type out;
         for (const auto& el : args[0].asArray())
@@ -496,7 +508,7 @@ void registerEmbrLib(Interpreter& interp) {
     });
 
     // reduce(arr: arr, fn: fn|ptr, init) -> any
-    interp.bindSpan("reduce", {pArr("arr"), pFnOrPtr("fn"), pAny("init")},
+    interp.bindSpan("reduce", {pArr("arr"), pFnOf("fn", 2), pAny("init")},
     [&interp](const ArgSpan& args) -> Value {
         Value acc = args[2];
         for (const auto& el : args[0].asArray())
@@ -561,7 +573,7 @@ void registerEmbrLib(Interpreter& interp) {
     //
     //   users = [{"name":"Alex","followers":123}, ...]
     //   sort_do(users, fn(u) return u["followers"] end, 0)
-    interp.bindSpan("sort_do", {pArr("arr"), pFnOrPtr("weight"), pOpt("descending")},
+    interp.bindSpan("sort_do", {pArr("arr"), pFnOf("weight", 1, TS::Num), pOpt("descending")},
     [&interp](const ArgSpan& args) -> Value {
         const auto& arr = args[0].asArray();
         bool desc = args.size() >= 3 && args[2].truthy();
@@ -604,7 +616,7 @@ void registerEmbrLib(Interpreter& interp) {
     // never crashes.
     //
     //   sort_cmp(words, fn(a, b) return len(a) - len(b) end)
-    interp.bindSpan("sort_cmp", {pArr("arr"), pFnOrPtr("cmp"), pOpt("descending")},
+    interp.bindSpan("sort_cmp", {pArr("arr"), pFnOf("cmp", 2, TS::Num), pOpt("descending")},
     [&interp](const ArgSpan& args) -> Value {
         Value::array_type arr = args[0].asArray();
         bool desc = args.size() >= 3 && args[2].truthy();
@@ -754,7 +766,7 @@ void registerEmbrLib(Interpreter& interp) {
 
     // find_do(arr, pred, default?) -> the first element for which pred(el) is truthy; `default` if none
     // match and one was given, otherwise raises
-    interp.bindSpan("find_do", {pArr("arr"), pFnOrPtr("pred"), pOpt("default")},
+    interp.bindSpan("find_do", {pArr("arr"), pFnOf("pred", 1), pOpt("default")},
     [&interp](const ArgSpan& args) -> Value {
         for (const auto& el : args[0].asArray())
             if (invoke(interp, args[1], {el}).truthy()) return el;
@@ -763,7 +775,7 @@ void registerEmbrLib(Interpreter& interp) {
     });
 
     // find_index_do(arr, pred) -> index of the first match, or -1
-    interp.bindSpan("find_index_do", {pArr("arr"), pFnOrPtr("pred")},
+    interp.bindSpan("find_index_do", {pArr("arr"), pFnOf("pred", 1)},
     [&interp](const ArgSpan& args) -> Value {
         const auto& a = args[0].asArray();
         for (size_t i = 0; i < a.size(); ++i)
@@ -780,13 +792,13 @@ void registerEmbrLib(Interpreter& interp) {
     });
 
     // any_do(arr, pred) / all_do(arr, pred) -> 1/0, short-circuiting (all_do of [] is 1, any_do of [] is 0)
-    interp.bindSpan("any_do", {pArr("arr"), pFnOrPtr("pred")},
+    interp.bindSpan("any_do", {pArr("arr"), pFnOf("pred", 1)},
     [&interp](const ArgSpan& args) -> Value {
         for (const auto& el : args[0].asArray())
             if (invoke(interp, args[1], {el}).truthy()) return Value((int64_t)1);
         return Value((int64_t)0);
     });
-    interp.bindSpan("all_do", {pArr("arr"), pFnOrPtr("pred")},
+    interp.bindSpan("all_do", {pArr("arr"), pFnOf("pred", 1)},
     [&interp](const ArgSpan& args) -> Value {
         for (const auto& el : args[0].asArray())
             if (!invoke(interp, args[1], {el}).truthy()) return Value((int64_t)0);
@@ -794,7 +806,7 @@ void registerEmbrLib(Interpreter& interp) {
     });
 
     // count_do(arr, pred) -> how many elements satisfy pred
-    interp.bindSpan("count_do", {pArr("arr"), pFnOrPtr("pred")},
+    interp.bindSpan("count_do", {pArr("arr"), pFnOf("pred", 1)},
     [&interp](const ArgSpan& args) -> Value {
         int64_t n = 0;
         for (const auto& el : args[0].asArray())
@@ -803,7 +815,7 @@ void registerEmbrLib(Interpreter& interp) {
     });
 
     // partition(arr, pred) -> [matching, non_matching], each in the original order
-    interp.bindSpan("partition", {pArr("arr"), pFnOrPtr("pred")},
+    interp.bindSpan("partition", {pArr("arr"), pFnOf("pred", 1)},
     [&interp](const ArgSpan& args) -> Value {
         Value::array_type yes, no;
         for (const auto& el : args[0].asArray())
@@ -883,7 +895,7 @@ void registerEmbrLib(Interpreter& interp) {
 
     // group_by(arr, keyfn) -> map of key -> array of the elements with that key, in original order.
     // keyfn must return a string or a number (numbers become their printed form: embr map keys are strings)
-    interp.bindSpan("group_by", {pArr("arr"), pFnOrPtr("keyfn")},
+    interp.bindSpan("group_by", {pArr("arr"), pFnOf("keyfn", 1)},
     [&interp](const ArgSpan& args) -> Value {
         std::unordered_map<std::string, Value::array_type> tmp;      // built as plain vectors, converted once
         for (const auto& el : args[0].asArray()) {
@@ -914,8 +926,8 @@ void registerEmbrLib(Interpreter& interp) {
             return a[best];
         };
     };
-    interp.bindSpan("min_do", {pArr("arr"), pFnOrPtr("weight")}, extremeBy("min_do", false));
-    interp.bindSpan("max_do", {pArr("arr"), pFnOrPtr("weight")}, extremeBy("max_do", true));
+    interp.bindSpan("min_do", {pArr("arr"), pFnOf("weight", 1, TS::Num)}, extremeBy("min_do", false));
+    interp.bindSpan("max_do", {pArr("arr"), pFnOf("weight", 1, TS::Num)}, extremeBy("max_do", true));
 
     // load_file(path: str) -> str
     //
@@ -1149,7 +1161,7 @@ EMBR_PLUGIN {
 }
 
 // what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
-EMBR_PLUGIN_INFO("embrlib", "1.0.0", "the batteries standard library: arrays, maps, sorting, higher-order helpers, files and modules", EMBR_CAP_NONE, EMBR_CAP_FILESYSTEM,
+EMBR_PLUGIN_INFO("embrlib", "2.0.0", "the batteries standard library: arrays, maps, sorting, higher-order helpers, files and modules", EMBR_CAP_NONE, EMBR_CAP_FILESYSTEM,
     {"all_do", "1/0, short-circuiting; any_do([]) is 0, all_do([]) is 1"},
     {"any_do", "1/0, short-circuiting; any_do([]) is 0, all_do([]) is 1"},
     {"append", "in place: adds val to the end of the variable and returns the new length. call it as append(&list, x)"},

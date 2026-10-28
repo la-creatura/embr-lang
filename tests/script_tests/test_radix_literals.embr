@@ -1,0 +1,18 @@
+# hex and binary integer literals
+import "testing.embr"
+import "embrlib"
+
+fn test_hex_and_binary_values()
+    assert_eq(0x10, 16)
+    assert_eq(0XfF, 255)
+    assert_eq(0b101, 5)
+    assert_eq(0B11, 3)
+    assert_eq(0x7fffffffffffffff, 9223372036854775807)
+end
+
+fn test_with_the_bit_operators()
+    assert_eq(0xf0 | 0x0f, 255)
+    assert_eq(0b1010 & 0b0110, 2)
+    assert_eq(0x1 << 4, 16)
+    assert_eq(-0x10, -16)
+end

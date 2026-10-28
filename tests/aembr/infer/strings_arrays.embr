@@ -1,0 +1,21 @@
+import "embrlib"
+# str and array parameters, a function with no result, a result that is an array
+fn shout(s)
+    print(s + "!")
+end
+fn total(a)
+    t = 0
+    for x in a
+        t = t + x
+    end
+    return t
+end
+fn doubled(a)
+    out = []
+    for x in a
+        append(&out, x * 2)
+    end
+    return out
+end
+shout("hi")
+print(total(doubled([1, 2, 3])))

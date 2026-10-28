@@ -1,0 +1,25 @@
+import "embrlib"
+# a variadic parameter collects the arguments that are left, and needs the type of each written
+fn total(first: int, ...rest: int) -> int
+    t = first
+    for x in rest
+        t = t + x
+    end
+    return t
+end
+fn join_all(sep: str, ...parts: str) -> str
+    out = ""
+    i = 0
+    while i < len(parts)
+        if i > 0
+            out = out + sep
+        end
+        out = out + parts[i]
+        i += 1
+    end
+    return out
+end
+print(total(1))
+print(total(1, 2, 3, 4))
+print(join_all("-", "a", "b", "c"))
+print(join_all("-"))

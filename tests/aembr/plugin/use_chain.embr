@@ -1,0 +1,2 @@
+import "chain"
+print(ninefold(2))

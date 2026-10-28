@@ -19,7 +19,7 @@ lacks() {
 
 list="$("$embr" plugins 2>&1)"
 has "list header" "$list" "NAME"
-has "list shows a C++ plugin" "$list" "regex"
+has "list shows a C++ plugin" "$list" "table"
 has "list shows a C plugin" "$list" "json"
 has "list shows capabilities" "$list" "process, env"
 has "list says why a plugin cannot be loaded" "$list" "built for plugin ABI 2"
@@ -32,11 +32,11 @@ has "plugin json: needs" "$one" "needs: none"
 has "plugin json: a function with its signature" "$one" "json_parse(text: str, opts?: map) -> any"
 has "plugin json: a doc line" "$one" "raises with a position on malformed input"
 
-cxx="$("$embr" plugin regex 2>&1)"
-has "plugin regex: kind" "$cxx" "written in C++"
-has "plugin regex: build id" "$cxx" "built with: cxx-abi"
-has "plugin regex: signature read from the bound function" "$cxx" "re_test(string: str, pattern: str, flags?: str)"
-has "plugin regex: doc" "$cxx" "1 if it matches anywhere, else 0"
+cxx="$("$embr" plugin table 2>&1)"
+has "plugin table: kind" "$cxx" "written in C++"
+has "plugin table: build id" "$cxx" "built with: cxx-abi"
+has "plugin table: signature read from the bound function" "$cxx" "table_get(t: ptr, key)"
+has "plugin table: doc" "$cxx" "raises \"key not found"
 
 caps="$("$embr" plugin http 2>&1)"
 has "plugin http: capabilities" "$caps" "needs: filesystem, network"
@@ -62,8 +62,8 @@ list="$("$embr" plugins 2>&1)"
 has "same ABI: it is not listed as broken" "$list" "cp_sameabi"
 lacks "same ABI: no problem line for it" "$(echo "$list" | grep -A1 cp_sameabi)" "different compiler"
 abi="$("$embr" abi)"
-has "embr abi: the tag" "$abi" "cxx1-"
-has "embr abi: the exact toolchain" "$abi" "cxx-abi 1;"
+has "embr abi: the tag" "$abi" "cxx2-"
+has "embr abi: the exact toolchain" "$abi" "cxx-abi 2;"
 has "the other ABI is refused with both tags" "$bad" "the plugin: cxx1-some-other-abi"
 none="$("$embr" plugin no_such_plugin_xyz 2>&1)"; rc=$?
 (( rc == 1 )) || { echo "FAIL [unknown plugin]: exit $rc, want 1"; fail=1; }
@@ -72,7 +72,7 @@ has "unknown plugin" "$none" "no_such_plugin_xyz"
 # the JSON is valid and says the same
 if command -v python3 >/dev/null 2>&1; then
     "$embr" plugins --json > "$work/list.json" 2>&1
-    "$embr" plugin regex --json > "$work/regex.json" 2>&1
+    "$embr" plugin table --json > "$work/regex.json" 2>&1
     python3 - "$work/list.json" "$work/regex.json" <<'PY' || fail=1
 import json, sys
 lst = json.load(open(sys.argv[1]))
@@ -81,17 +81,17 @@ ok = True
 def check(c, msg):
     global ok
     if not c: print("FAIL [json]:", msg); ok = False
-check("regex" in names and names["regex"]["kind"] == "cxx", "regex is a cxx plugin")
+check("table" in names and names["table"]["kind"] == "cxx", "table is a cxx plugin")
 check(names["json"]["kind"] == "c" and names["json"]["functions"] == 3, "json is a c plugin with 3 functions")
 check(names["os"]["capabilities"] == ["process", "env"], "os needs process and env")
 check(names["embrlib"]["optional_capabilities"] == ["filesystem"], "embrlib uses the filesystem when allowed")
 check(names["cp_badbuild"]["problem"] != "", "cp_badbuild has a problem")
 r = json.load(open(sys.argv[2]))
 fns = {f["name"]: f for f in r["functions"]}
-check(r["name"] == "regex" and r["abi"] == 1 and r["build_id"].startswith("cxx-abi"), "regex facts")
-check(fns["re_test"]["signature"].startswith("fn re_test("), "re_test signature")
-check(fns["re_test"]["doc"] != "", "re_test doc")
-check(all(f["doc"] != "" for f in r["functions"]), "every regex function is documented")
+check(r["name"] == "table" and r["abi"] == 1 and r["build_id"].startswith("cxx-abi"), "table facts")
+check(fns["table_get"]["signature"].startswith("fn table_get("), "table_get signature")
+check(fns["table_get"]["doc"] != "", "table_get doc")
+check(all(f["doc"] != "" for f in r["functions"]), "every table function is documented")
 sys.exit(0 if ok else 1)
 PY
 fi

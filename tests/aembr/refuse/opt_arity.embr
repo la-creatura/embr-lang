@@ -1,0 +1,5 @@
+# refuse: takes at most 2 arguments
+fn f(a: int, b: int = 1)
+    print(a + b)
+end
+f(1, 2, 3)

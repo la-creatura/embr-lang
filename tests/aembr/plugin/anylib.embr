@@ -1,0 +1,61 @@
+import "embrlib"
+__module__ = {
+    "version": "1.0.0",
+    "description": "values of no fixed type and nested arrays across the plugin boundary, written in embr and compiled by aembr",
+    "capabilities": [],
+}
+
+# the kind of a value, and its text
+fn describe(v: any) -> str
+    return type(v) + ": " + str(v)
+end
+
+# a value in a record
+fn wrap(v: any) -> any
+    return {"value": v, "kind": type(v), "size": 1}
+end
+
+# changes a value deep inside what it is given (it gets its own copy)
+fn bump(doc: any) -> any
+    doc["count"] = doc["count"] + 1
+    doc["items"][0] = "first"
+    return doc
+end
+
+fn sum_grid(g: arr<arr<int>>) -> int
+    t = 0
+    for row in g
+        for x in row
+            t += x
+        end
+    end
+    return t
+end
+
+fn transpose(g: arr<arr<int>>) -> arr<arr<int>>
+    local arr<arr<int>> out = []
+    j = 0
+    while j < len(g[0])
+        col = []
+        i = 0
+        while i < len(g)
+            append(&col, g[i][j])
+            i += 1
+        end
+        append(&out, col)
+        j += 1
+    end
+    return out
+end
+
+fn group(words: arr<str>) -> map<arr<str>>
+    local map<arr<str>> out = {}
+    for w in words
+        k = w[0]
+        if !has(out, k)
+            out[k] = []
+        end
+        append(&out[k], w)
+    end
+    return out
+end

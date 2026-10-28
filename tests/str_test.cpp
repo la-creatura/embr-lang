@@ -34,6 +34,11 @@ int main() {
           "print(str_lower(\"HeLLo\"))\nprint(str_upper(\"HeLLo\"))\n",
           "hello\nHELLO\n" },
 
+        { "str_cmp: byte order, usable with sort_cmp",
+          "print(str_cmp(\"a\", \"b\"))\nprint(str_cmp(\"b\", \"a\"))\nprint(str_cmp(\"ab\", \"ab\"))\nprint(str_cmp(\"ab\", \"abc\"))\nprint(str_cmp(\"Z\", \"a\"))\n"
+          "print(sort_cmp([\"pear\", \"apple\", \"fig\"], str_cmp))\n",
+          "-1\n1\n0\n-1\n-1\n[\"apple\", \"fig\", \"pear\"]\n" },
+
         { "str_find: returns index of first match",
           "print(str_find(\"hello\", \"ll\"))\n",
           "2\n" },
@@ -142,5 +147,5 @@ int main() {
           "print(str_repeat(\"\", 4000000000000) == \"\")\n",
           "1\n" },
     };
-    return embr_test::runSuite("str plugin test suite", tests, {"str"});
+    return embr_test::runSuite("str plugin test suite", tests, {"str", "embrlib"});
 }

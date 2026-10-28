@@ -1,0 +1,63 @@
+# errors: the kind of each, a long message, the line, an error that is caught several calls up, a try inside a loop that breaks out
+import "embrlib"
+fn deep(n: int) -> int
+    if n == 0
+        error("bottom")
+    end
+    return deep(n - 1) + 1
+end
+fn wrap(n: int) -> str
+    try
+        return str(deep(n))
+    catch e
+        return "caught " + e["message"] + " from " + e["kind"]
+    end
+end
+print(wrap(5))
+try
+    x = [1][3]
+catch e
+    print(e["kind"])
+    print(e["line"])
+end
+try
+    s = "ab"[7]
+catch e
+    print(e["message"])
+end
+long = ""
+i = 0
+while i < 300
+    long = long + "0123456789"
+    i = i + 1
+end
+try
+    error(long)
+catch e
+    print(len(e["message"]))
+end
+n = 0
+while 1
+    try
+        n = n + 1
+        if n == 3
+            break
+        end
+        if n == 2
+            error("two")
+        end
+    catch e
+        print("caught " + e["message"])
+    end
+end
+print(n)
+try
+    try
+        error("a")
+    catch e
+        print(e["message"])
+    end
+    error("b")
+catch e
+    print(e["message"])
+end

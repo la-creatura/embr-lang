@@ -15,11 +15,9 @@ module.exports = grammar({
 
   conflicts: $ => [
     [$.fn_assign, $._expression],
-    [$.multi_assign, $._expression],
-    [$.local_target, $._expression],
-    [$.parameter, $._expression],
     [$.map_pair, $._expression],
     [$._argument, $.parenthesized_expression],
+    [$.binary_expression],
   ],
 
   rules: {
@@ -31,7 +29,7 @@ module.exports = grammar({
     _statement: $ => choice(
       $.if_statement, $.while_statement, $.for_statement, $.try_statement,
       $.break_statement, $.continue_statement, $.return_statement, $.import_statement,
-      $.local_statement, $.const_statement, $.function_definition, $.fn_assign,
+      $.local_statement, $.const_statement, $.const_import_statement, $.c_text_statement, $.function_definition, $.fn_assign,
       $.multi_assign, $.assignment, $.compound_assignment, $.expression_statement,
     ),
 
@@ -74,6 +72,16 @@ module.exports = grammar({
       seq('const', $.function_definition),
     ),
 
+    // const import "file.embr"   const c import "file.c"   const c file import "file.h"   (the file is read where it is written). one token, so that
+    // `const c = 1` and a variable called `c` are still read as before
+    const_import_statement: $ => seq(
+      alias(token(seq('const', optional(seq(/[ \t]+/, 'c', optional(seq(/[ \t]+/, 'file')))), /[ \t]+/, 'import')), $.const_import_keyword),
+      field('path', $.string),
+    ),
+
+    // c """ ... """   c file """ ... """   : C text for aembr, the compiler. `embr` refuses a file that has one
+    c_text_statement: $ => token(seq('c', optional(seq(/[ \t]+/, 'file')), /[ \t]*/, '"""', /([^"]|"[^"]|""[^"])*/, '"""')),
+
     function_definition: $ => seq(
       'fn', field('name', $.identifier), '(', optional($.parameters), ')', optional($.return_type),
       optional($._block), 'end',
@@ -85,13 +93,19 @@ module.exports = grammar({
     ),
 
     parameters: $ => commaSep1($.parameter),
+    // fn f(a, b: int = 5, &c: arr<int>, v: host): a default and `&name` (in-out) are for aembr, the compiler; `host` is the type of a plugin's host value
     parameter: $ => choice(
       seq('...', $.identifier, optional($.type_annotation)),
-      seq($.identifier, optional($.type_annotation)),
+      seq(optional('&'), $.identifier, optional($.type_annotation), optional(seq('=', choice($.number, $.string, seq('-', $.number))))),
     ),
     type_annotation: $ => seq(':', $._type),
     return_type: $ => seq('->', $._type),
-    _type: $ => seq(alias($.identifier, $.type_name), optional(seq('<', $._type, '>'))),
+    _type: $ => choice(
+      $.function_type,
+      seq(alias($.identifier, $.type_name), optional(seq('<', $._type, '>'))),
+    ),
+    // fn(int, str) -> int : types only, and the result is optional. `-> fn(int) -> int` reads to the right
+    function_type: $ => prec.right(seq('fn', '(', optional(commaSep1($._type)), ')', optional(seq('->', $._type)))),
 
     multi_assign: $ => seq($.identifier, repeat1(seq(',', $.identifier)), '=', $._expression),
     assignment: $ => seq(field('target', $._expression), '=', field('value', $._expression)),
@@ -136,7 +150,7 @@ module.exports = grammar({
     lambda: $ => seq('fn', '(', optional($.parameters), ')', optional($.return_type), optional($._block), 'end'),
 
     identifier: _ => /[A-Za-z_][A-Za-z0-9_]*/,
-    number: _ => /[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?/,
+    number: _ => token(choice(/0[xX][0-9a-fA-F]+/, /0[bB][01]+/, /[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?/)),
     string: _ => /"([^"\\]|\\(.|\n))*"/,
   },
 });

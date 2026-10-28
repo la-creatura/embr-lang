@@ -1,0 +1,8 @@
+# the same as tools/bench/loop.embr (top level names are locals of the program)
+total = 0
+i = 0
+while i < 3000000
+    total = total + i % 7
+    i = i + 1
+end
+print(total)

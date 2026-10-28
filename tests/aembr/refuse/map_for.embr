@@ -1,0 +1,5 @@
+# refuse: a for loop over a map is not compiled
+m = {"a": 1}
+for k in m
+    print(k)
+end

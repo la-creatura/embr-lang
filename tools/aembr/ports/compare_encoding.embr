@@ -1,0 +1,30 @@
+import "embrlib"
+import "@LIB@"
+# the same calls for the C plugin and the aembr one; the output has to be identical
+inputs = ["", "a", "ab", "abc", "abcd", "hello, world", "\x00\x01\x02\xfe\xff", "The quick brown fox jumps over the lazy dog", "\xff\xfe\xfd\xfc\xfb\xfa"]
+long = ""
+i = 0
+while i < 300
+    long = long + "0123456789abcdef"
+    i += 1
+end
+append(&inputs, long)
+for s in inputs
+    print(hex_encode(s), crc32(s), sha256(s))
+    print(base64_encode(s), base64_encode(s, 1, 1), base64_encode(s, 0, 1))
+    print(base64_decode(base64_encode(s), 0) == s, base64_decode(base64_encode(s, 1, 1), 1) == s, hex_decode(hex_encode(s)) == s)
+    print(hex_encode(sha256_raw(s)) == sha256(s))
+end
+bad = ["zz", "abc", "12 34", "a", "Zg=", "Zg===", "Zh==", "Zm9v!"]
+for t in bad
+    try
+        print(base64_decode(t, 0))
+    catch e
+        print(e["kind"], e["message"])
+    end
+    try
+        print(hex_decode(t))
+    catch e
+        print(e["kind"], e["message"])
+    end
+end

@@ -1,0 +1,8 @@
+# refuse: an error is read as
+import "embrlib"
+k = "message"
+try
+    error("x")
+catch e
+    print(e[k])
+end

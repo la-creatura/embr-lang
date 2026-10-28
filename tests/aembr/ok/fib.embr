@@ -1,0 +1,8 @@
+# fib(27), the same as tools/bench/fib.embr with the types written
+fn fib(n: int) -> int
+    if n < 2
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+print(fib(27))

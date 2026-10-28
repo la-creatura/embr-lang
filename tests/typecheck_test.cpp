@@ -44,6 +44,32 @@ static std::vector<std::string> typeErrorsIn(const embr::Interpreter& interp, co
     return out;
 }
 
+// the type the checker recorded for the outermost expression that starts at line:col (Options::typesOut), written as the words a
+// script uses, with a * when it is sure (one core type, not soft). "none" when nothing starts there
+static std::string recordedType(const std::string& src, int line, int col, bool closedWorld = false, std::vector<std::string>* errorsOut = nullptr) {
+    embr::Lexer lex(src);
+    auto tokens = lex.tokenize();
+    embr::SourceMap sm = lex.sourceMap();
+    embr::Parser parser(std::move(tokens), sm);
+    auto ast = parser.parse();
+    embr::typecheck::ExprTypes types;
+    embr::typecheck::Options o;
+    o.closedWorld = closedWorld;
+    o.source = &sm;
+    o.typesOut = &types;
+    auto errs = embr::typecheck::check(ast, o);
+    if (errorsOut) for (auto& e : errs) errorsOut->push_back(e.message);
+    const embr::Expr* best = nullptr;
+    for (auto& kv : types) {
+        const embr::Expr* e = kv.first;
+        if (e->range.startLine != line || e->range.startCol != col) continue;
+        if (!best || e->range.endLine > best->range.endLine || (e->range.endLine == best->range.endLine && e->range.endCol > best->range.endCol)) best = e;
+    }
+    if (!best) return "none";
+    const auto& t = types[best];
+    return embr::typecheck::detail::tn(t.t) + (t.sure ? "*" : "");
+}
+
 static std::string join(const std::vector<std::string>& v) {
     std::string s;
     for (auto& x : v) s += (s.empty() ? "" : " | ") + x;
@@ -411,6 +437,53 @@ int main() {
             report("a value the checker can't see is refused at run time", err.find("argument 's' to 'tt_up'") != std::string::npos, err);
         }
     }
+
+    // the type record (Options::typesOut), for tools that want the type of every expression
+    {
+        auto check = [&](const std::string& name, const std::string& src, int line, int col, const std::string& want, bool closed = false) {
+            std::string got = recordedType(src, line, col, closed);
+            report(name, got == want, "wanted '" + want + "', got '" + got + "'");
+        };
+        check("record: a literal is sure", "x = 3\n", 1, 5, "int*");
+        check("record: a string literal is sure", "x = \"a\"\n", 1, 5, "str*");
+        check("record: / is a float", "x = 7 / 2\n", 1, 5, "float*");
+        check("record: a comparison is an int", "x = 1 < 2\n", 1, 5, "int*");
+        check("record: + - * give num, the VM turns an overflow into a float", "x = 1 + 2\n", 1, 5, "num");
+        check("record: a variable use has the variable's type", "x = 3\ny = x\n", 2, 5, "int*");
+        check("record: a call of a typed fn has its result type", "fn f(a: int) -> int\n  return a\nend\ny = f(2)\n", 4, 5, "int*");
+        check("record: an array element is not sure, an element type is a promise", "local arr<int> a = [1, 2]\nb = a[0]\n", 2, 5, "int");
+        check("record: an untyped parameter of a closed fn takes the types of the calls", "fn g(n)\n  return n\nend\nz = g(3)\n", 2, 10, "int*", true);
+        check("record: nothing starts at a position with no expression", "x = 3\n", 5, 1, "none");
+        // the record changes nothing else: the same errors with and without it
+        for (const char* src : {"x = 1\nx = \"a\"\n", "fn f(a: int) -> int\n  return a\nend\nf(\"s\")\n", "x = 1\ny = x + 2\n"}) {
+            std::vector<std::string> with;
+            recordedType(src, 1, 1, false, &with);
+            auto without = typeErrors(src);
+            report(std::string("record: errors unchanged for ") + std::to_string(without.size()) + " error source", join(with) == join(without), join(with) + " vs " + join(without));
+        }
+    }
+
+    // function types: fn(int) -> int
+    expectClean("a lambda fits a parameter of a function type", "fn ft(f: fn(int) -> int) -> int\n  return f(1)\nend\nprint(ft(fn(a: int) -> int return a end))\n");
+    expectClean("an unannotated lambda fits a function type", "fn ft(f: fn(int) -> int) -> int\n  return f(1)\nend\nprint(ft(fn(a) return a end))\n");
+    expectClean("a function type with no result does not check the result", "fn ft(f: fn(int)) -> int\n  return f(1)\nend\nprint(ft(fn(a: int) -> str return \"s\" end))\n");
+    expectClean("a variable that took its type from a lambda may be given a lambda of another arity", "f = fn(a) return a end\nf = fn(a, b) return a end\n");
+    expectClean("a declared function is a value of its own type", "fn sq(x: int) -> int\n  return x\nend\nfn ft(f: fn(int) -> int) -> int\n  return f(1)\nend\nprint(ft(sq))\n");
+    expectClean("a function that returns a function type", "fn mk() -> fn(int) -> int\n  return fn(a: int) -> int return a end\nend\nprint(mk()(3))\n");
+    expectError("a lambda with another number of parameters", "fn ft(f: fn(int) -> int) -> int\n  return f(1)\nend\nprint(ft(fn(a: int, b: int) -> int return a end))\n",
+                "expected fn(int) -> int but got fn(int, int) -> int");
+    expectError("a lambda with a parameter of another type", "fn ft(f: fn(int) -> int) -> int\n  return f(1)\nend\nprint(ft(fn(a: str) -> int return 1 end))\n",
+                "expected fn(int) -> int but got fn(str) -> int");
+    expectError("a lambda with a result of another type", "fn ft(f: fn(int) -> int) -> int\n  return f(1)\nend\nprint(ft(fn(a: int) -> str return \"s\" end))\n",
+                "expected fn(int) -> int but got fn(int) -> str");
+    expectError("a declared function of another arity", "fn sq(x: int) -> int\n  return x\nend\nfn ft(f: fn(int, int) -> int) -> int\n  return f(1, 2)\nend\nprint(ft(sq))\n",
+                "expected fn(int, int) -> int but got fn(int) -> int");
+    expectError("a call with too many arguments", "fn ft(f: fn(int) -> int) -> int\n  return f(1, 2)\nend\n", "which takes 1 argument, not 2");
+    expectError("a call with an argument of the wrong type", "fn ft(f: fn(int) -> int) -> int\n  return f(\"s\")\nend\n", "argument 1 to 'f': expected int but got str");
+    expectError("the result of a call is the written result", "fn ft(f: fn(int) -> int) -> str\n  x = f(1)\n  return x\nend\n", "returns int");
+    expectError("a local of a function type takes a function of that type", "local fn(int) -> int g = fn(a: int, b: int) -> int return a end\n",
+                "cannot assign fn(int, int) -> int to 'g' declared as fn(int) -> int");
+    expectError("a number is not a function", "fn ft(f: fn(int) -> int) -> int\n  return f(1)\nend\nprint(ft(5))\n", "expected fn(int) -> int but got int");
 
     // every message points at the source
     {

@@ -1,0 +1,20 @@
+fn f(m)
+    ret_raw    = m[1]
+    name       = m[2]
+    x = 1
+    y = 2
+    z = 3
+    # a comment ends the run
+    ab  = 1
+    cde = 2
+    q = 1
+    rs = 2
+
+    k  = 1
+    lm = 2
+    mn = [
+        1,
+    ]
+    ab   = 1  # trailing
+    cdef = 2
+end

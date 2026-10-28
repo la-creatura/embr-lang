@@ -285,6 +285,42 @@ int main() {
           "print(total)\n"
           "print(data[1][1])\n",
           "600\ngamma\n" },
+
+        { "worker_cancel/worker_join_timeout: a worker stuck in a loop is cancelled and joins",
+          R"EMBR(write_file("test_parallel_spin_worker.embr", "import \"parallel\"\n\nfn spin(x)\n    while 1\n    end\nend\n")
+)EMBR"
+          "in_ch = channel()\n"
+          "out_ch = channel()\n"
+          "w = worker_spawn(\"test_parallel_spin_worker.embr\", \"spin\", in_ch, out_ch)\n"
+          "channel_send(in_ch, 1)\n"
+          "print(worker_join_timeout(w, 0.1))\n"
+          "print(worker_alive(w))\n"
+          "worker_cancel(w)\n"
+          "print(worker_join_timeout(w, 10))\n"
+          "print(worker_alive(w))\n"
+          "r = channel_recv(out_ch)\n"
+          "print(r[\"ok\"])\n"
+          "print(r[\"error\"][\"message\"])\n",
+          "0\n1\n1\n0\n0\nscript stopped: cancelled\n" },
+
+        { "worker_cancel: a worker waiting on an empty in_channel wakes up and ends, cancelling twice is fine",
+          "in_ch = channel()\n"
+          "out_ch = channel()\n"
+          "w = worker_spawn(\"test_parallel_worker.embr\", \"double_it\", in_ch, out_ch)\n"
+          "worker_cancel(w)\n"
+          "worker_cancel(w)\n"
+          "print(worker_join_timeout(w, 10))\n"
+          "print(worker_join_timeout(w, 0))\n",
+          "1\n1\n" },
+
+        { "worker_join_timeout: 1 for a worker that finished by itself",
+          "in_ch = channel()\n"
+          "out_ch = channel()\n"
+          "w = worker_spawn(\"test_parallel_worker.embr\", \"double_it\", in_ch, out_ch)\n"
+          "channel_close(in_ch)\n"
+          "print(worker_join_timeout(w, 10))\n"
+          "print(worker_alive(w))\n",
+          "1\n0\n" },
     };
 
     const std::vector<std::string> plugins = {"parallel", "embrlib", "table"};

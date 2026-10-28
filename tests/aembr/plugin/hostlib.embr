@@ -1,0 +1,58 @@
+# a plugin whose functions read the host's values where they are (host parameters) and write their results straight into the host (a host result)
+__module__ = {"name": "hostlib", "version": "1.0.0", "description": "functions on the host's own values", "capabilities": ["native"]}
+
+# how many items an array has, and the sum of its ints
+fn host_count(v: host) -> int
+    n = 0
+    c """
+        $n = (int64_t)embrp_array_len($ctx, $v);
+    """
+    return n
+end
+
+fn host_sum(v: host) -> int
+    total = 0
+    c """
+        size_t n = embrp_array_len($ctx, $v);
+        for (size_t i = 0; i < n; ++i) $total += embrp_to_int($ctx, embrp_array_at($ctx, $v, i));
+    """
+    return total
+end
+
+# a helper takes the host value on
+fn __first(v: host) -> int
+    r = -1
+    c """
+        if (embrp_array_len($ctx, $v)) $r = embrp_to_int($ctx, embrp_array_at($ctx, $v, 0));
+    """
+    return r
+end
+fn host_first(v: host) -> int
+    return __first(v)
+end
+
+# the result is written into the host's slot
+fn host_range(n: int) -> host
+    c """
+        RT_HOST(cx, embrp_set_array($ctx, $out, (size_t)$n));
+        for (int64_t i = 0; i < $n && !cx->err; ++i) RT_HOST(cx, embrp_array_push_int($ctx, $out, i * i));
+    """
+end
+
+fn host_echo(v: host) -> host
+    c """
+        RT_HOST(cx, embrp_set_copy($ctx, $out, $v));
+    """
+end
+
+# a const fn can take and give host values too (it is written out where it is called)
+const fn host_twice(v: host, n: int)
+    c """
+        RT_HOST(cx, embrp_set_array($ctx, $out, 2));
+        RT_HOST(cx, embrp_array_push($ctx, $out, $v));
+        RT_HOST(cx, embrp_array_push_int($ctx, $out, $n));
+    """
+end
+fn host_pair(v: host, n: int) -> host
+    host_twice(v, n)
+end

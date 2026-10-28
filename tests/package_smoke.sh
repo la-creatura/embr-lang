@@ -104,6 +104,28 @@ print(adder_add(2, 40))'
     has "a module with a bundled library works" "$out" "42"
 fi
 
+# ---- package_path in a worker for a package only the parent imported
+cat > pp_worker.embr <<'EOF'
+import "package"
+fn where(x)
+    return package_path("greeter", "greeter.embr")
+end
+EOF
+run 'import "greeter"
+import "parallel"
+import "async"
+i = channel()
+o = channel()
+w = worker_spawn("pp_worker.embr", "where", i, o)
+channel_send(i, 1)
+channel_close(i)
+print(channel_recv(o)["value"])
+worker_join(w)
+p = async_spawn("pp_worker.embr", "where", 1)
+print(async_await(p))'
+has "package_path in a worker" "$out" "$work/cache/greeter-"
+(( $(grep -c "/greeter.embr" <<<"$out") == 2 )) || { echo "FAIL [package_path in a parallel worker and an async task]: $out"; fail=1; }
+
 # ---- reading them
 list="$("$embr" packages 2>&1)"
 has "packages: header" "$list" "NAME"
@@ -803,7 +825,7 @@ cxxplug="$plugdir/str.$ext"; [[ -f "$cxxplug" ]] || cxxplug="$plugdir/str.so"
 mkdir -p src_abi1/lib
 cp "$cxxplug" src_abi1/lib/str.$ext
 write_abi_meta() {   # dir, plugin map text
-    printf '__package__ = {"name": "str", "version": "1.0.0", "description": "x", "capabilities": [], "plugin": %s}\n' "$2" > "$1/meta.embr"
+    printf '__package__ = {"name": "str", "version": "1.1.0", "description": "x", "capabilities": [], "plugin": %s}\n' "$2" > "$1/meta.embr"
 }
 write_abi_meta src_abi1 "{\"$target\": {\"$hosttag\": \"lib/str.$ext\"}}"
 out="$("$embr" pack src_abi1 -o abi1.pmbr 2>&1)"; rc=$?
@@ -855,27 +877,27 @@ real = open(cxx, "rb").read()
 creal = open(cpl, "rb").read() if os.path.exists(cpl) else b""
 fake = b"not a library, built for another compiler"
 def meta(name, plugin):
-    return ('__package__ = {"name": "%s", "version": "1.0.0", "description": "x", "capabilities": [], "plugin": %s}\n' % (name, plugin)).encode()
+    return ('__package__ = {"name": "%s", "version": "%s", "description": "x", "capabilities": [], "plugin": %s}\n' % (name, "1.1.0" if name == "str" else "1.0.0", plugin)).encode()
 def save(dirname, name, plugin, files):
     os.makedirs(f"{w}/{dirname}", exist_ok=True)
-    open(f"{w}/{dirname}/{name}.pmbr", "wb").write(pack(1, "1.0.0", dict(files, **{"meta.embr": meta(name, plugin)})))
+    open(f"{w}/{dirname}/{name}.pmbr", "wb").write(pack(1, "1.1.0" if name == "str" else "1.0.0", dict(files, **{"meta.embr": meta(name, plugin)})))
     open(f"{w}/{dirname}/t.embr", "w").write('import "%s"\nprint("LOADED")\n' % name)
 # two builds on this platform: another compiler's first, ours second
-save("abi_two", "str", '{"%s": {"cxx1-msvc-v143": "lib/msvc.dll", "%s": "lib/ours.so"}}' % (target, hosttag), {"lib/msvc.dll": fake, "lib/ours.so": real})
+save("abi_two", "str", '{"%s": {"cxx2-msvc-v143": "lib/msvc.dll", "%s": "lib/ours.so"}}' % (target, hosttag), {"lib/msvc.dll": fake, "lib/ours.so": real})
 # only builds of other ABIs
-save("abi_none", "str", '{"%s": {"cxx1-msvc-v143": "lib/msvc.dll", "cxx1-itanium-libcxx18": "lib/libcxx.so"}}' % target, {"lib/msvc.dll": fake, "lib/libcxx.so": fake})
+save("abi_none", "str", '{"%s": {"cxx2-msvc-v143": "lib/msvc.dll", "cxx2-itanium-libcxx18": "lib/libcxx.so"}}' % target, {"lib/msvc.dll": fake, "lib/libcxx.so": fake})
 # other ABIs, and a C build that any host takes
 if creal:
-    save("abi_c", "path", '{"%s": {"cxx1-msvc-v143": "lib/msvc.dll", "c": "lib/path_c.so"}}' % target, {"lib/msvc.dll": fake, "lib/path_c.so": creal})
+    save("abi_c", "path", '{"%s": {"cxx2-msvc-v143": "lib/msvc.dll", "c": "lib/path_c.so"}}' % target, {"lib/msvc.dll": fake, "lib/path_c.so": creal})
 # a build for this platform with another compiler (name "str") and one with ours, to merge
 save("abi_m1", "str", '{"%s": {"%s": "lib/ours.so"}}' % (target, hosttag), {"lib/ours.so": real})
-save("abi_m2", "str", '{"%s": {"cxx1-msvc-v143": "lib/msvc.dll"}}' % target, {"lib/msvc.dll": fake})
+save("abi_m2", "str", '{"%s": {"cxx2-msvc-v143": "lib/msvc.dll"}}' % target, {"lib/msvc.dll": fake})
 PY
 out="$(cd abi_two && "$embr" t.embr 2>&1)"
 has "two builds: ours is chosen" "$out" "LOADED"
 out="$(cd abi_none && "$embr" t.embr 2>&1)"
 has "no build fits: the message names both sides" "$out" "it has no build for $target that fits this embr: its C++ ABI is $hosttag"
-has "no build fits: and what the package has" "$out" "the package has cxx1-itanium-libcxx18, cxx1-msvc-v143"
+has "no build fits: and what the package has" "$out" "the package has cxx2-itanium-libcxx18, cxx2-msvc-v143"
 lacks "no build fits: nothing was loaded" "$out" "LOADED"
 if [[ -d abi_c ]]; then
     out="$(cd abi_c && "$embr" t.embr 2>&1)"
@@ -884,7 +906,7 @@ fi
 out="$("$embr" merge abi_m1/str.pmbr abi_m2/str.pmbr -o abi_merged.pmbr 2>&1)"; rc=$?
 (( rc == 0 )) || { echo "FAIL [merge builds of different ABIs]: $out"; fail=1; }
 mj="$("$embr" package abi_merged.pmbr --json)"
-has "merge: both builds" "$mj" "\"builds\": [\"$target/$hosttag\", \"$target/cxx1-msvc-v143\"]"
+has "merge: both builds" "$mj" "\"builds\": [\"$target/$hosttag\", \"$target/cxx2-msvc-v143\"]"
 mkdir -p abi_mm; cp abi_merged.pmbr abi_mm/str.pmbr; cp abi_m1/t.embr abi_mm/
 has "merged package loads our build" "$(cd abi_mm && "$embr" t.embr 2>&1)" "LOADED"
 

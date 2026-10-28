@@ -1,0 +1,3 @@
+# refuse: only embrlib, str, embrmath and C plugins
+p = "str"
+import p

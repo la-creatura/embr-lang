@@ -1,0 +1,73 @@
+import "embrlib"
+import "time"
+import "str"
+import "@LIB@"
+# usage: embr bench_path.embr. best-of-3 milliseconds for 100k calls of each function
+fn best(f: fn(), reps: int) -> float
+    b = 1000000.0
+    r = 0
+    while r < reps
+        t0 = time_monotonic()
+        f()
+        t = (time_monotonic() - t0) * 1000.0
+        if t < b
+            b = t
+        end
+        r += 1
+    end
+    return b
+end
+fn row(label, ms)
+    print(str_pad_right(label, 28), num_fixed(ms, 2), "ms")
+end
+p1 = "/usr/local/lib/python3.12/site-packages/numpy/core/_multiarray_umath.cpython-312.so"
+p2 = "a/./b/../c//d/./e/../../f"
+row("100k x basename", best(fn()
+    i = 0
+    while i < 100000
+        path_basename(p1)
+        i += 1
+    end
+end, 3))
+row("100k x dirname", best(fn()
+    i = 0
+    while i < 100000
+        path_dirname(p1)
+        i += 1
+    end
+end, 3))
+row("100k x extname", best(fn()
+    i = 0
+    while i < 100000
+        path_extname(p1)
+        i += 1
+    end
+end, 3))
+row("100k x stem", best(fn()
+    i = 0
+    while i < 100000
+        path_stem(p1)
+        i += 1
+    end
+end, 3))
+row("100k x normalize", best(fn()
+    i = 0
+    while i < 100000
+        path_normalize(p2)
+        i += 1
+    end
+end, 3))
+row("100k x join (3 parts)", best(fn()
+    i = 0
+    while i < 100000
+        path_join("/usr", "local", "lib/x.so")
+        i += 1
+    end
+end, 3))
+row("100k x relative", best(fn()
+    i = 0
+    while i < 100000
+        path_relative("/a/b/c/d/e", "/a/b/x/y")
+        i += 1
+    end
+end, 3))

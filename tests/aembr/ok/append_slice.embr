@@ -1,0 +1,14 @@
+import "embrlib"
+fn f(p: str) -> str
+    out = ""
+    out = out + slice(p, 1, 4)
+    out = out + slice(out, 0, 2)
+    out = out + slice(p, 3)
+    out = out + slice(p, -2, 100)
+    out = out + slice(p, 5, 2)
+    keep = out
+    out = out + slice(p, 0, 3)
+    return out + "|" + keep
+end
+print(f("abcdefgh"))
+print(f(""))

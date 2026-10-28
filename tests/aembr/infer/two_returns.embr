@@ -1,0 +1,7 @@
+fn f(x)
+    if x
+        return 1
+    end
+    return 1.5
+end
+print(f(1))

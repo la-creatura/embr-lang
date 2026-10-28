@@ -1,0 +1,86 @@
+# closures: a captured array and string changed through the closure, a closure made in a loop, a function passed along, an error from inside one
+import "embrlib"
+fn make_log() -> fn(str) -> int
+    lines = []
+    prefix = "log: "
+    writer = fn(msg: str) -> int
+        lines = push(lines, prefix + msg)
+        return len(lines)
+    end
+    return writer
+end
+add = make_log()
+add("one")
+print(add("two"))
+
+fn compose(f: fn(int) -> int, g: fn(int) -> int, x: int) -> int
+    return g(f(x))
+end
+inc = fn(x: int) -> int
+    return x + 1
+end
+twice = fn(x: int) -> int
+    return x * 2
+end
+print(compose(inc, twice, 5))
+print(compose(twice, inc, 5))
+
+fn run_all(n: int) -> int
+    total = 0
+    for i in [1...n]
+        f = fn() -> int
+            return i * i
+        end
+        total = total + f()
+    end
+    return total
+end
+print(run_all(4))
+
+fn make_acc(start: float) -> fn(float) -> float
+    sum = start
+    return fn(x: float) -> float
+        sum = sum + x
+        return sum
+    end
+end
+acc = make_acc(0.5)
+acc(1.5)
+print(acc(2.0))
+
+fn boom(f: fn(int) -> int, n: int) -> int
+    return f(n)
+end
+bad = fn(n: int) -> int
+    if n > 2
+        error("too big " + str(n))
+    end
+    return n
+end
+print(boom(bad, 1))
+try
+    print(boom(bad, 5))
+catch e
+    print(e["message"])
+end
+
+fn counter_pair() -> fn() -> int
+    n = 0
+    return fn() -> int
+        n = n + 1
+        return n
+    end
+end
+a = counter_pair()
+b = counter_pair()
+a()
+a()
+print(a() + b())
+m = {"k": 1}
+bump = fn() -> int
+    m["k"] = m["k"] + 1
+    return m["k"]
+end
+bump()
+print(bump())
+print(m["k"])

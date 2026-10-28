@@ -1,0 +1,9 @@
+# refuse: cannot use the in-out parameter
+fn f(&n: int) -> int
+    local g = fn() -> int
+        return n
+    end
+    return g()
+end
+local a = 1
+print(f(&a))

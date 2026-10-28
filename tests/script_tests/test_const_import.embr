@@ -1,0 +1,22 @@
+# const import: the statements of another file, read when the script is read, path relative to this file
+import "testing.embr"
+import "embrlib"
+
+const import "inc/shared.embr"
+
+fn test_the_functions_and_names_of_the_file_are_here()
+    assert_eq(shared_twice(4), 10)
+    assert_eq(shared_name, "shared")
+end
+
+fn test_an_include_inside_a_function_is_part_of_it()
+    fn_with_include = fn()
+        const import "inc/shared_inner.embr"
+        return shared_inner(1)
+    end
+    assert_eq(fn_with_include(), 2)
+end
+
+fn test_const_c_import_makes_a_block_of_c_text_that_embr_refuses()
+    assert_raises(fn() load_module("inc/c_text_user.embr") end)
+end

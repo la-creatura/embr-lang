@@ -1,0 +1,12 @@
+# const import brings the statements of a file in, const c import brings a file in as C text
+const import "helpers.embr"
+
+fn bump(n: int) -> int
+    r = n
+    const c import "add_one.c"
+    return r
+end
+
+print(triple(5))
+print(offset)
+print(bump(41))

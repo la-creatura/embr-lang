@@ -1,0 +1,8 @@
+# refuse: no 'return value' of it gave a type
+fn a(n)
+    return b(n)
+end
+fn b(n)
+    return a(n)
+end
+print(a(1))

@@ -38,6 +38,23 @@ int main() {
           "print(os_platform())\nprint(os_pid() > 0)\nprint(len(os_cwd()) > 0)\nprint(len(os_args()))\n",
           EMBR_TEST_PLATFORM "\n1\n1\n0\n" },
 
+        { "os_script_dir: empty when the code has no script (the harness)",
+          "print(len(os_script_dir()))\n",
+          "0\n" },
+
+        { "os_stdout_write: raw bytes, no newline, shares the stream with print",
+          "print(os_stdout_write(\"ab\"))\nos_stdout_write(\"c\\n\")\nprint(os_stdout_flush())\n",
+          "ab2\nc\n0\n" },
+
+        { "os_stdin_read: waits for n bytes, is short at the end, then empty",
+          "print(os_stdin_read(3))\nprint(os_stdin_read(10))\nprint(len(os_stdin_read(4)))\n",
+          "abc\ndef\n\n0\n", "abcdef\n" },
+
+        { "os_stdin_read_all: the rest of stdin; n out of range raises",
+          "print(os_stdin_read(2))\nprint(len(os_stdin_read_all()))\n"
+          "try\nos_stdin_read(-1)\nprint(\"unreachable\")\ncatch e\nprint(\"caught\")\nend\n",
+          "xy\n4\ncaught\n", std::string("xyz\nw\0", 6) },
+
 #ifndef _WIN32
         { "os_exec: captures stdout, stderr and exit code without a shell",
           "r = os_exec([\"sh\", \"-c\", \"echo out; echo err 1>&2; exit 3\"])\n"

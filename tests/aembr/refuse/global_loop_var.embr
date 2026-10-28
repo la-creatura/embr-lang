@@ -1,0 +1,8 @@
+# refuse: loop variable
+for i in [1, 2]
+    print(i)
+end
+fn f() -> int
+    return i
+end
+print(f())

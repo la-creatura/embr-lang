@@ -1,0 +1,13 @@
+# floats and ints worked out from the calls, a result used in the next call
+fn sq(x)
+    return x * x
+end
+fn half(x)
+    return x / 2
+end
+fn mix(a, b)
+    return sq(a) + half(b)
+end
+print(mix(3, 4))
+print(mix(4, 6))
+print(half(7))

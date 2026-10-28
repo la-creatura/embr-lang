@@ -1,0 +1,513 @@
+# ajson: the json plugin (parse, validate, stringify) written in aembr. the scanner and the writer are C blocks that work on the text and on the values
+# where they are (json_valid scans and builds nothing); the aembr part makes the handles for true, false and null and raises the errors.
+# import "ajson" gives the same functions as import "json" for json_parse(text), json_valid(text) and json_stringify(value, indent).
+#
+# good to know
+#   - json_stringify takes the indent as a number (0 for compact, the default), and the options map is left out
+import "embrlib"
+
+__module__ = {
+    "version": "1.0.0",
+    "description": "JSON parse, validate and stringify, written in aembr",
+    "capabilities": ["native"],
+}
+
+c file """
+#include <stdio.h>
+#include <errno.h>
+#include <math.h>
+#include <inttypes.h>
+typedef struct { char* p; size_t n, cap; } AeBuf;
+static void ae_put(AeBuf* b, const char* s, size_t n) {
+    if (b->n + n + 1 > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 256;
+        while (cap < b->n + n + 1) cap *= 2;
+        char* q = realloc(b->p, cap);
+        if (!q) { fputs("error: out of memory\n", stderr); exit(1); }
+        b->p = q; b->cap = cap;
+    }
+    if (n) memcpy(b->p + b->n, s, n);
+    b->n += n;
+}
+static void ae_put1(AeBuf* b, char c) { ae_put(b, &c, 1); }
+static const char ae_hexd_json[] = "0123456789abcdef";
+
+/* ---- a scan of json text. aj_value checks the syntax and moves *pi on; with a Build it makes the values too. on an error it leaves the reason in
+   P->msg and the position the error is reported at in P->pos */
+typedef struct {
+    const unsigned char* s;
+    int64_t n, pos;
+    const char* msg;
+    char msgbuf[160];
+    EmbrCtx* h;                /* the host, when values are built in it */
+} AjP;
+static void* aj_fail(AjP* P, int64_t pos, const char* msg) { P->pos = pos; P->msg = msg; return NULL; }
+static void aj_ws(AjP* P) { while (P->pos < P->n && (P->s[P->pos] == 32 || P->s[P->pos] == 9 || P->s[P->pos] == 10 || P->s[P->pos] == 13)) P->pos++; }
+static int aj_isdig(int c) { return c >= '0' && c <= '9'; }
+
+/* four hex digits at P->pos. -1 after an error */
+static int64_t aj_hex4(AjP* P) {
+    if (P->pos + 4 > P->n) { aj_fail(P, P->pos, "truncated \\u escape"); return -1; }
+    int64_t v = 0;
+    for (int k = 0; k < 4; ++k) {
+        int c = P->s[P->pos++];
+        v *= 16;
+        if (c >= '0' && c <= '9') v += c - '0';
+        else if (c >= 'a' && c <= 'f') v += c - 87;
+        else if (c >= 'A' && c <= 'F') v += c - 55;
+        else { aj_fail(P, P->pos, "invalid hex digit in \\u escape"); return -1; }
+    }
+    return v;
+}
+static void aj_utf8(char* o, int* k, int64_t cp) {
+    if (cp <= 0x7F) o[(*k)++] = (char)cp;
+    else if (cp <= 0x7FF) { o[(*k)++] = (char)(0xC0 | (cp >> 6)); o[(*k)++] = (char)(0x80 | (cp & 0x3F)); }
+    else if (cp <= 0xFFFF) { o[(*k)++] = (char)(0xE0 | (cp >> 12)); o[(*k)++] = (char)(0x80 | ((cp >> 6) & 0x3F)); o[(*k)++] = (char)(0x80 | (cp & 0x3F)); }
+    else { o[(*k)++] = (char)(0xF0 | (cp >> 18)); o[(*k)++] = (char)(0x80 | ((cp >> 12) & 0x3F)); o[(*k)++] = (char)(0x80 | ((cp >> 6) & 0x3F)); o[(*k)++] = (char)(0x80 | (cp & 0x3F)); }
+}
+/* a string at P->pos (the opening quote). with `out` the text is collected in it. 0 after an error */
+static int aj_string(AjP* P, AeBuf* out) {
+    int64_t i = P->pos + 1;
+    int64_t seg = i;
+    for (;;) {
+        if (i >= P->n) { aj_fail(P, i, "unterminated string"); return 0; }
+        int c = P->s[i];
+        if (c == '"') {
+            if (out) ae_put(out, (const char*)P->s + seg, (size_t)(i - seg));
+            P->pos = i + 1;
+            return 1;
+        }
+        if (c != '\\') { i++; continue; }
+        if (out) ae_put(out, (const char*)P->s + seg, (size_t)(i - seg));
+        i++;
+        if (i >= P->n) { aj_fail(P, i, "unterminated escape"); return 0; }
+        int e = P->s[i++];
+        char one = 0;
+        switch (e) {
+        case '"': one = '"'; break;
+        case '\\': one = '\\'; break;
+        case '/': one = '/'; break;
+        case 'b': one = 8; break;
+        case 'f': one = 12; break;
+        case 'n': one = 10; break;
+        case 'r': one = 13; break;
+        case 't': one = 9; break;
+        case 'u': {
+            P->pos = i;
+            int64_t cp = aj_hex4(P);
+            if (cp < 0) return 0;
+            if (cp >= 0xD800 && cp <= 0xDBFF) {
+                int64_t p = P->pos;
+                if (!(p + 1 < P->n && P->s[p] == '\\' && P->s[p + 1] == 'u')) { aj_fail(P, p, "unpaired high surrogate in \\u escape"); return 0; }
+                P->pos = p + 2;
+                int64_t lo = aj_hex4(P);
+                if (lo < 0) return 0;
+                if (lo < 0xDC00 || lo > 0xDFFF) { aj_fail(P, P->pos, "high surrogate not followed by a low surrogate"); return 0; }
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+            } else if (cp >= 0xDC00 && cp <= 0xDFFF) { aj_fail(P, P->pos, "unpaired low surrogate in \\u escape"); return 0; }
+            if (out) { char u[4]; int k = 0; aj_utf8(u, &k, cp); ae_put(out, u, (size_t)k); }
+            i = P->pos;
+            seg = i;
+            continue;
+        }
+        default:
+            snprintf(P->msgbuf, sizeof P->msgbuf, "invalid escape '\\%c'", e);
+            aj_fail(P, i, P->msgbuf);
+            return 0;
+        }
+        if (out) ae_put1(out, one);
+        seg = i;
+    }
+}
+/* the string at P->pos: *p and *n point into the text when it has no escape in it, else into `tmp` */
+static int aj_str_in(AjP* P, AeBuf* tmp, const char** p, size_t* n) {
+    int64_t i = P->pos + 1;
+    while (i < P->n && P->s[i] != '"' && P->s[i] != '\\') i++;
+    if (i < P->n && P->s[i] == '"') {
+        *p = (const char*)P->s + P->pos + 1; *n = (size_t)(i - P->pos - 1);
+        P->pos = i + 1;
+        return 1;
+    }
+    if (!aj_string(P, tmp)) return 0;
+    *p = tmp->p ? tmp->p : ""; *n = tmp->n;
+    return 1;
+}
+/* a number at P->pos: an int in *iv (*isint is 1), else a float in *dv */
+static int aj_number(AjP* P, int* isint, int64_t* iv, double* dv) {
+    int64_t start = P->pos, i = start;
+    int is_float = 0, neg = 0;
+    if (P->s[i] == '-') { neg = 1; i++; }
+    if (i >= P->n || !aj_isdig(P->s[i])) { aj_fail(P, i, "invalid number"); return 0; }
+    if (P->s[i] == '0' && i + 1 < P->n && aj_isdig(P->s[i + 1])) { aj_fail(P, i, "invalid number (no leading zeros in JSON)"); return 0; }
+    while (i < P->n && aj_isdig(P->s[i])) i++;
+    if (i < P->n && P->s[i] == '.') {
+        is_float = 1; i++;
+        if (i >= P->n || !aj_isdig(P->s[i])) { aj_fail(P, i, "invalid number (digits must follow '.')"); return 0; }
+        while (i < P->n && aj_isdig(P->s[i])) i++;
+    }
+    if (i < P->n && (P->s[i] == 'e' || P->s[i] == 'E')) {
+        is_float = 1; i++;
+        if (i < P->n && (P->s[i] == '+' || P->s[i] == '-')) i++;
+        if (i >= P->n || !aj_isdig(P->s[i])) { aj_fail(P, i, "invalid number exponent"); return 0; }
+        while (i < P->n && aj_isdig(P->s[i])) i++;
+    }
+    P->pos = i;
+    if (!is_float) {
+        uint64_t acc = 0, limit = neg ? 9223372036854775808ULL : 9223372036854775807ULL;
+        int fits = 1;
+        for (int64_t k = neg ? start + 1 : start; k < i; ++k) {
+            unsigned d = (unsigned)(P->s[k] - '0');
+            if (acc > (limit - d) / 10) { fits = 0; break; }
+            acc = acc * 10 + d;
+        }
+        if (fits) { *isint = 1; *iv = neg ? (int64_t)(0 - acc) : (int64_t)acc; return 1; }
+    }
+    char small[64];
+    int64_t len = i - start;
+    char* tok = len < 64 ? small : malloc((size_t)len + 1);
+    memcpy(tok, P->s + start, (size_t)len);
+    tok[len] = 0;
+    errno = 0;
+    double d = strtod(tok, NULL);
+    int bad = errno == ERANGE && (d == 0 || d == HUGE_VAL || d == -HUGE_VAL);
+    if (bad) snprintf(P->msgbuf, sizeof P->msgbuf, "invalid number literal: %.80s", tok);
+    if (tok != small) free(tok);
+    if (bad) { aj_fail(P, i, P->msgbuf); return 0; }
+    *isint = 0; *dv = d;
+    return 1;
+}
+static int aj_hostfail(AjP* P) { aj_fail(P, P->pos, "could not build the value in the host (nested too deeply?)"); return 0; }
+static int aj_literal(AjP* P, const char* word, const char* why, EmbrValue* out, void* ptr, const char* tag) {
+    int64_t w = (int64_t)strlen(word);
+    if (P->n - P->pos >= w && memcmp(P->s + P->pos, word, (size_t)w) == 0) {
+        P->pos += w;
+        if (P->h && embrp_set_ptr(P->h, out, ptr, tag, NULL)) return aj_hostfail(P);
+        return 1;
+    }
+    aj_fail(P, P->pos, why);
+    return 0;
+}
+static int aj_value(AjP* P, int depth, EmbrValue* out);
+/* one member of an object (container is the map, key its name) or one item of an array (key is NULL): strings and numbers go straight in, anything else
+   is built in the slot `t` of the container and then put in */
+static int aj_item(AjP* P, int depth, EmbrValue* container, EmbrValue* t, const char* key, size_t klen) {
+    EmbrCtx* h = P->h;
+    if (!h) return aj_value(P, depth, NULL);
+    if (depth > 1000) { aj_fail(P, P->pos, "input nested too deeply (max depth 1000) while parsing a nested value"); return 0; }
+    aj_ws(P);
+    if (P->pos >= P->n) { aj_fail(P, P->pos, "unexpected end of input"); return 0; }
+    int c = P->s[P->pos];
+    if (c == '"') {
+        AeBuf tmp = {0, 0, 0};
+        const char* p; size_t n;
+        int ok = aj_str_in(P, &tmp, &p, &n);
+        if (ok && (key ? embrp_map_set_str(h, container, key, klen, p, n) : embrp_array_push_str(h, container, p, n))) ok = aj_hostfail(P);
+        free(tmp.p);
+        return ok;
+    }
+    if (c == '-' || aj_isdig(c)) {
+        int isint; int64_t iv = 0; double dv = 0;
+        if (!aj_number(P, &isint, &iv, &dv)) return 0;
+        int bad;
+        if (key) bad = (isint ? embrp_set_int(h, t, iv) : embrp_set_float(h, t, dv)) || embrp_map_set(h, container, key, klen, t);
+        else bad = isint ? embrp_array_push_int(h, container, iv) : embrp_array_push_float(h, container, dv);
+        return bad ? aj_hostfail(P) : 1;
+    }
+    if (!aj_value(P, depth, t)) return 0;
+    if (key ? embrp_map_set(h, container, key, klen, t) : embrp_array_push(h, container, t)) return aj_hostfail(P);
+    return 1;
+}
+/* a value at P->pos. with P->h it is built in `out` (a slot of the host), else only checked */
+static int aj_value(AjP* P, int depth, EmbrValue* out) {
+    EmbrCtx* h = P->h;
+    if (depth > 1000) { aj_fail(P, P->pos, "input nested too deeply (max depth 1000) while parsing a nested value"); return 0; }
+    aj_ws(P);
+    if (P->pos >= P->n) { aj_fail(P, P->pos, "unexpected end of input"); return 0; }
+    int c = P->s[P->pos];
+    if (c == '{') {
+        EmbrValue* t = NULL;
+        if (h) { if (embrp_set_map(h, out)) return aj_hostfail(P); t = embrp_temp(h); }
+        P->pos++;
+        aj_ws(P);
+        if (P->pos < P->n && P->s[P->pos] == '}') { P->pos++; return 1; }
+        for (;;) {
+            aj_ws(P);
+            if (P->pos >= P->n || P->s[P->pos] != '"') { aj_fail(P, P->pos, "expected string key"); return 0; }
+            AeBuf kb = {0, 0, 0};
+            const char* kp; size_t kn;
+            if (!aj_str_in(P, &kb, &kp, &kn)) { free(kb.p); return 0; }
+            aj_ws(P);
+            if (P->pos >= P->n || P->s[P->pos] != ':') { free(kb.p); aj_fail(P, P->pos, "expected ':' after object key"); return 0; }
+            P->pos++;
+            const int ok = aj_item(P, depth + 1, out, t, kp, kn);
+            free(kb.p);
+            if (!ok) return 0;
+            aj_ws(P);
+            int d = P->pos < P->n ? P->s[P->pos] : 0;
+            if (d == ',') { P->pos++; continue; }
+            if (d == '}') { P->pos++; return 1; }
+            aj_fail(P, P->pos, "expected ',' or '}' in object");
+            return 0;
+        }
+    }
+    if (c == '[') {
+        EmbrValue* t = NULL;
+        if (h) { if (embrp_set_array(h, out, 0)) return aj_hostfail(P); t = embrp_temp(h); }
+        P->pos++;
+        aj_ws(P);
+        if (P->pos < P->n && P->s[P->pos] == ']') { P->pos++; return 1; }
+        for (;;) {
+            if (!aj_item(P, depth + 1, out, t, NULL, 0)) return 0;
+            aj_ws(P);
+            int d = P->pos < P->n ? P->s[P->pos] : 0;
+            if (d == ',') { P->pos++; continue; }
+            if (d == ']') { P->pos++; return 1; }
+            aj_fail(P, P->pos, "expected ',' or ']' in array");
+            return 0;
+        }
+    }
+    if (c == '"') {
+        AeBuf tmp = {0, 0, 0};
+        const char* p; size_t n;
+        int ok = aj_str_in(P, &tmp, &p, &n);
+        if (ok && h && embrp_set_str(h, out, p, n)) ok = aj_hostfail(P);
+        free(tmp.p);
+        return ok;
+    }
+    if (c == 't') return aj_literal(P, "true", "invalid literal (expected 'true')", out, (void*)1, "bool");
+    if (c == 'f') return aj_literal(P, "false", "invalid literal (expected 'false')", out, NULL, "bool");
+    if (c == 'n') return aj_literal(P, "null", "invalid literal (expected 'null')", out, NULL, "nil");
+    if (c == '-' || aj_isdig(c)) {
+        int isint; int64_t iv = 0; double dv = 0;
+        if (!aj_number(P, &isint, &iv, &dv)) return 0;
+        if (h && (isint ? embrp_set_int(h, out, iv) : embrp_set_float(h, out, dv))) return aj_hostfail(P);
+        return 1;
+    }
+    snprintf(P->msgbuf, sizeof P->msgbuf, "unexpected character '%c'", c);
+    aj_fail(P, P->pos, P->msgbuf);
+    return 0;
+}
+/* the whole text: one value and nothing after it */
+static int aj_document(AjP* P, EmbrValue* out) {
+    if (!aj_value(P, 1, out)) return 0;
+    aj_ws(P);
+    if (P->pos < P->n) { aj_fail(P, P->pos, "trailing characters after JSON value"); return 0; }
+    return 1;
+}
+
+/* ---- the writer. err: 0 fine, 1 too deep, 2 a string that is not UTF-8 (at is the byte), 3 a pointer, 4 something else */
+typedef struct { AeBuf b; int err; int64_t at; int indent; } AjW;
+static int64_t aj_utf8_len(const unsigned char* s, int64_t n, int64_t i) {
+    int c = s[i], extra;
+    uint32_t cp;
+    if (c < 0x80) return 1;
+    else if ((c & 0xE0) == 0xC0) { extra = 1; cp = c & 0x1F; }
+    else if ((c & 0xF0) == 0xE0) { extra = 2; cp = c & 0x0F; }
+    else if ((c & 0xF8) == 0xF0) { extra = 3; cp = c & 0x07; }
+    else return 0;
+    if (i + extra >= n) return 0;
+    for (int k = 1; k <= extra; ++k) {
+        int cc = s[i + k];
+        if ((cc & 0xC0) != 0x80) return 0;
+        cp = (cp << 6) | (uint32_t)(cc & 0x3F);
+    }
+    static const uint32_t low[4] = {0, 0x80, 0x800, 0x10000};
+    if (cp < low[extra] || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) return 0;
+    return extra + 1;
+}
+static void aj_quote_bytes(AjW* w, const char* str, int64_t n) {
+    const unsigned char* s = (const unsigned char*)str;
+    int64_t seg = 0;
+    ae_put1(&w->b, '"');
+    for (int64_t i = 0; i < n; ) {
+        int c = s[i];
+        if (c >= 128) {
+            int64_t m = aj_utf8_len(s, n, i);
+            if (!m) { w->err = 2; w->at = i; return; }
+            i += m;
+            continue;
+        }
+        if (c >= 32 && c != '"' && c != '\\') { i++; continue; }
+        ae_put(&w->b, (const char*)s + seg, (size_t)(i - seg));
+        switch (c) {
+        case '"': ae_put(&w->b, "\\\"", 2); break;
+        case '\\': ae_put(&w->b, "\\\\", 2); break;
+        case 8: ae_put(&w->b, "\\b", 2); break;
+        case 12: ae_put(&w->b, "\\f", 2); break;
+        case 10: ae_put(&w->b, "\\n", 2); break;
+        case 13: ae_put(&w->b, "\\r", 2); break;
+        case 9: ae_put(&w->b, "\\t", 2); break;
+        default: { char u[8]; snprintf(u, sizeof u, "\\u00%c%c", ae_hexd_json[c >> 4], ae_hexd_json[c & 15]); ae_put(&w->b, u, 6); }
+        }
+        i++;
+        seg = i;
+    }
+    ae_put(&w->b, (const char*)s + seg, (size_t)(n - seg));
+    ae_put1(&w->b, '"');
+}
+static void aj_newline(AjW* w, int d) {
+    if (w->indent <= 0) return;
+    ae_put1(&w->b, '\n');
+    for (int k = 0; k < w->indent * d; ++k) ae_put1(&w->b, ' ');
+}
+static void aj_float(AjW* w, double d) {
+    char buf[400];
+    size_t n;
+    if (d != d || d - d != 0.0) { ae_put(&w->b, "null", 4); return; }
+    if (d >= -1e15 && d <= 1e15 && d == (double)(long long)d) n = (size_t)snprintf(buf, sizeof buf, "%lld", (long long)d);
+    else {
+        n = (size_t)snprintf(buf, sizeof buf, "%f", d);
+        if (n >= sizeof buf) n = sizeof buf - 1;
+        if (memchr(buf, '.', n)) {
+            while (n > 0 && buf[n - 1] == '0') --n;
+            if (n > 0 && buf[n - 1] == '.') --n;
+        }
+    }
+    ae_put(&w->b, buf, n);
+}
+/* a value of the host, written where it is. maps come sorted from the host */
+static void aj_host(AjW* w, EmbrCtx* h, const EmbrValue* v, int depth) {
+    if (w->err) return;
+    if (depth > 1000) { w->err = 1; return; }
+    char num[32];
+    switch (embrp_type(h, v)) {
+    case EMBR_TAG_INT: ae_put(&w->b, num, (size_t)snprintf(num, sizeof num, "%" PRId64, v->u.i)); return;
+    case EMBR_TAG_FLOAT: aj_float(w, v->u.d); return;
+    case EMBR_TAG_STRING: {
+        size_t n; const char* s = embrp_str(h, v, &n);
+        aj_quote_bytes(w, s, (int64_t)n);
+        return;
+    }
+    case EMBR_TAG_ARRAY: {
+        size_t n = embrp_array_len(h, v);
+        if (n == 0) { ae_put(&w->b, "[]", 2); return; }
+        ae_put1(&w->b, '[');
+        for (size_t i = 0; i < n && !w->err; ++i) {
+            if (i > 0) ae_put1(&w->b, ',');
+            aj_newline(w, depth + 1);
+            aj_host(w, h, embrp_array_at(h, v, i), depth + 1);
+        }
+        aj_newline(w, depth);
+        ae_put1(&w->b, ']');
+        return;
+    }
+    case EMBR_TAG_MAP: {
+        size_t n; const EmbrMapEntry* e = embrp_map_entries(h, v, &n);
+        if (n == 0) { ae_put(&w->b, "{}", 2); return; }
+        ae_put1(&w->b, '{');
+        for (size_t i = 0; i < n && !w->err; ++i) {
+            if (i > 0) ae_put1(&w->b, ',');
+            aj_newline(w, depth + 1);
+            aj_quote_bytes(w, e[i].key, (int64_t)e[i].key_len);
+            if (w->indent > 0) ae_put(&w->b, ": ", 2); else ae_put1(&w->b, ':');
+            aj_host(w, h, e[i].value, depth + 1);
+        }
+        aj_newline(w, depth);
+        ae_put1(&w->b, '}');
+        return;
+    }
+    case EMBR_TAG_POINTER: {
+        const char* tag = embrp_ptr_tag(h, v);
+        if (strcmp(tag, "bool") == 0) { if (embrp_truthy(h, v)) ae_put(&w->b, "true", 4); else ae_put(&w->b, "false", 5); }
+        else if (strcmp(tag, "nil") == 0) ae_put(&w->b, "null", 4);
+        else w->err = 3;
+        return;
+    }
+    default: w->err = 4; return;
+    }
+}
+"""
+
+const fn byte_at(s, i)
+    b = 0
+    c """
+        $b = (unsigned char)$s->data[$i];
+    """
+    return b
+end
+
+fn fail(kind: str, message: str)
+    c """
+        rt_raise_dyn_kind(cx, $kind->data, 0, $message->data);
+    """
+end
+
+# an error of the parser says where, as the C plugin does: the line, the column and the byte position
+fn pfail(text: str, pos: int, msg: str)
+    n = len(text)
+    stop = pos
+    if stop > n
+        stop = n
+    end
+    line = 1
+    line_start = 0
+    i = 0
+    while i < stop
+        if byte_at(text, i) == 10
+            line += 1
+            line_start = i + 1
+        end
+        i += 1
+    end
+    fail("json_parse", msg + " at line " + str(line) + ", column " + str(stop - line_start + 1) + " (position " + str(pos) + ")")
+end
+
+# the parser builds the value in the host's own slot (-> host), the scan for json_valid builds nothing
+fn json_parse(text: str) -> host
+    pos = 0
+    msg = ""
+    c """
+        AjP P;
+        P.s = (const unsigned char*)$text->data; P.n = $text->len; P.pos = 0; P.msg = NULL; P.h = $ctx;
+        if (!aj_document(&P, $out)) { $pos = P.pos; rt_own_str(&$msg, rt_str_from(P.msg, (int64_t)strlen(P.msg))); }
+    """
+    if len(msg) > 0
+        pfail(text, pos, msg)
+    end
+end
+
+fn json_valid(text: str) -> int
+    ok = 0
+    c """
+        AjP P;
+        P.s = (const unsigned char*)$text->data; P.n = $text->len; P.pos = 0; P.msg = NULL; P.h = NULL;
+        $ok = aj_document(&P, NULL);
+    """
+    return ok
+end
+
+# ---- the writer reads the host's value where it is
+fn json_stringify(value: host, indent: int = 0) -> str
+    n = indent
+    if n < 0
+        n = 0
+    end
+    if n > 16
+        n = 16
+    end
+    out = ""
+    err = 0
+    at = 0
+    c """
+        AjW w;
+        memset(&w, 0, sizeof w);
+        w.indent = (int)$n;
+        aj_host(&w, $ctx, $value, 0);
+        $err = w.err; $at = w.at;
+        if (!w.err) rt_own_str(&$out, rt_str_from(w.b.p ? w.b.p : "", (int64_t)w.b.n));
+        free(w.b.p);
+    """
+    if err == 1
+        fail("json_stringify", "value nested too deeply (max depth 1000)")
+    end
+    if err == 2
+        fail("json_stringify", "string contains invalid UTF-8 at byte " + str(at) + " (JSON text must be UTF-8; pass {\"lossy\": 1} to replace such bytes with U+FFFD)")
+    end
+    if err == 3
+        fail("json_stringify", "cannot serialize a pointer value to JSON")
+    end
+    if err == 4
+        fail("json_stringify", "cannot serialize this value to JSON")
+    end
+    return out
+end

@@ -1,0 +1,54 @@
+import "embrlib"
+# nested containers: errors keep the data, empty literals take their type from the use, typed locals
+local arr<arr<str>> table = []
+append(&table, ["a", "b"])
+append(&table, [])
+append(&table[1], "c")
+print(len(table[1]))
+
+grid = [[1, 2, 3], [4, 5, 6]]
+try
+    grid[1][7] = 1
+catch e
+    print(e["message"])
+end
+print(grid[1][2])
+try
+    grid[5][0] = 1
+catch e
+    print(e["message"])
+end
+print(len(grid))
+
+books = {"fiction": ["dune"], "science": []}
+try
+    books["poetry"][0] = "x"
+catch e
+    print(e["message"])
+end
+append(&books["science"], "cosmos")
+print(books["science"][0])
+
+fn first_row(g: arr<arr<int>>) -> arr<int>
+    return g[0]
+end
+r = first_row(grid)
+r[0] = 99
+print(grid[0][0])
+print(r[0])
+
+levels = [[[1], [2, 3]], [[4]]]
+levels[0][1][0] = 20
+print(levels[0][1][0] + levels[1][0][0])
+vals = values(books)
+fn fill(m: map<arr<int>>, k: str) -> map<arr<int>>
+    if !has(m, k)
+        m[k] = []
+    end
+    append(&m[k], 1)
+    return m
+end
+filled = fill({"a": [0]}, "b")
+print(len(filled["b"]))
+print(len(filled["a"]))
+print(len(vals))

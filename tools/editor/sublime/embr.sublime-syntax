@@ -8,11 +8,12 @@ scope: source.embr
 
 variables:
   ident: '[A-Za-z_][A-Za-z0-9_]*'
-  type: '(?:int|num|str|arr|map|fn|ptr|any)'
+  type: '(?:int|num|str|arr|map|fn|ptr|any|host)'
 
 contexts:
   main:
     - include: comments
+    - include: raw-strings
     - include: strings
     - include: numbers
     - include: fn-definition
@@ -40,6 +41,21 @@ contexts:
       scope: punctuation.definition.comment.end.embr
       pop: true
 
+  # c """ ... """ : C text for aembr, nothing in it is an escape
+  raw-strings:
+    - match: '"""'
+      scope: punctuation.definition.string.begin.embr
+      push: raw-string
+
+  raw-string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.triple.embr
+    - match: '"""'
+      scope: punctuation.definition.string.end.embr
+      pop: true
+    - match: '\$(?:\$|\w+)'
+      scope: variable.other.embr
+
   strings:
     - match: '"'
       scope: punctuation.definition.string.begin.embr
@@ -60,6 +76,8 @@ contexts:
       scope: invalid.illegal.unknown-escape.embr
 
   numbers:
+    - match: '(?<![\w.])0(?:[xX][0-9a-fA-F]+|[bB][01]+)(?![\w.])'
+      scope: constant.numeric.integer.embr
     - match: '(?<![\w.])\d+(?:\.\d+)?[eE][+-]?\d+(?![\w.])'
       scope: constant.numeric.float.embr
     - match: '(?<![\w.])\d+\.\d+(?![\w.])'

@@ -1,0 +1,8 @@
+total = 5
+fn g() -> int
+    h = fn() -> int
+        return total
+    end
+    return h()
+end
+print(g())

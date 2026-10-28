@@ -1,0 +1,5 @@
+# refuse: does not fit its type
+fn f(a: int, b: str = 1)
+    print(a)
+end
+f(1)

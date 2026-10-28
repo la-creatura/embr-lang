@@ -1,0 +1,353 @@
+# apath: the path plugin (pure path-string utilities, POSIX separators) written in aembr. only one thing needs C: reading a byte of a string.
+# import "apath" gives the same functions as import "path". a drive letter (Windows) is not handled.
+import "embrlib"
+
+__module__ = {
+    "version": "1.0.0",
+    "description": "pure path-string utilities, written in aembr",
+    "capabilities": ["native"],
+}
+
+const fn byte_at(s, i)
+    b = 0
+    c """
+        $b = (unsigned char)$s->data[$i];
+    """
+    return b
+end
+
+# where the names start: after the leading separators
+fn rel_start(s: str) -> int
+    i = 0
+    n = len(s)
+    while i < n and byte_at(s, i) == 47
+        i += 1
+    end
+    return i
+end
+
+# where the last name starts (the end of the path when it ends in a separator)
+fn name_start(s: str, rel: int) -> int
+    i = len(s)
+    while i > rel and byte_at(s, i - 1) != 47
+        i -= 1
+    end
+    return i
+end
+
+# the extension of the name at [b, n): from the last '.', not for ".", ".." or a name that starts with the dot
+fn ext_start(s: str, b: int, n: int) -> int
+    size = n - b
+    if size == 0
+        return n
+    end
+    if size == 1 and byte_at(s, b) == 46
+        return n
+    end
+    if size == 2 and byte_at(s, b) == 46 and byte_at(s, b + 1) == 46
+        return n
+    end
+    i = n
+    while i > b and byte_at(s, i - 1) != 46
+        i -= 1
+    end
+    if i == b or i == b + 1
+        return n
+    end
+    return i - 1
+end
+
+fn path_dirname(p: str) -> str
+    n = len(p)
+    rel = rel_start(p)
+    end_ = n
+    while end_ > rel and byte_at(p, end_ - 1) == 47
+        end_ -= 1
+    end
+    f = end_
+    while f > rel and byte_at(p, f - 1) != 47
+        f -= 1
+    end
+    out = ""
+    if rel > 0
+        out = "/"
+    end
+    i = rel
+    first = 1
+    while i < f
+        while i < f and byte_at(p, i) == 47
+            i += 1
+        end
+        b = i
+        while i < f and byte_at(p, i) != 47
+            i += 1
+        end
+        if i == b
+            break
+        end
+        if !first
+            out = out + "/"
+        end
+        out = out + slice(p, b, i)
+        first = 0
+    end
+    return out
+end
+
+fn path_basename(p: str) -> str
+    n = len(p)
+    rel = rel_start(p)
+    end_ = n
+    if name_start(p, rel) == n and rel < n
+        while end_ > rel and byte_at(p, end_ - 1) == 47
+            end_ -= 1
+        end
+    end
+    f = end_
+    while f > rel and byte_at(p, f - 1) != 47
+        f -= 1
+    end
+    return slice(p, f, end_)
+end
+
+fn path_extname(p: str) -> str
+    n = len(p)
+    f = name_start(p, rel_start(p))
+    return slice(p, ext_start(p, f, n), n)
+end
+
+fn path_stem(p: str) -> str
+    n = len(p)
+    f = name_start(p, rel_start(p))
+    return slice(p, f, ext_start(p, f, n))
+end
+
+fn path_is_abs(p: str) -> int
+    return len(p) > 0 and byte_at(p, 0) == 47
+end
+
+fn path_normalize(p: str) -> str
+    n = len(p)
+    if n == 0
+        return "."
+    end
+    rel = rel_start(p)
+    root = rel > 0
+    sb = []
+    se = []
+    i = rel
+    while i < n
+        while i < n and byte_at(p, i) == 47
+            i += 1
+        end
+        b = i
+        while i < n and byte_at(p, i) != 47
+            i += 1
+        end
+        if i == b
+            break
+        end
+        size = i - b
+        if size == 1 and byte_at(p, b) == 46
+            continue
+        end
+        if size == 2 and byte_at(p, b) == 46 and byte_at(p, b + 1) == 46
+            top = len(sb)
+            if top > 0
+                pb = sb[top - 1]
+                pe = se[top - 1]
+                if !(pe - pb == 2 and byte_at(p, pb) == 46 and byte_at(p, pb + 1) == 46)
+                    remove_last(&sb)
+                    remove_last(&se)
+                    continue
+                end
+            end
+            if root
+                continue
+            end
+        end
+        append(&sb, b)
+        append(&se, i)
+    end
+    out = ""
+    if root
+        out = "/"
+    end
+    k = 0
+    while k < len(sb)
+        if k > 0
+            out = out + "/"
+        end
+        out = out + slice(p, sb[k], se[k])
+        k += 1
+    end
+    if len(sb) == 0 and !root
+        out = "."
+    end
+    return out
+end
+
+# buf /= s, as std::filesystem does it: an absolute s replaces everything, else one separator and s
+fn append_path(buf: str, s: str) -> str
+    if len(s) > 0 and byte_at(s, 0) == 47
+        return s
+    end
+    out = buf
+    if len(buf) > rel_start(buf) and byte_at(buf, len(buf) - 1) != 47
+        out = out + "/"
+    end
+    return out + s
+end
+
+# the same path with one separator between the names
+fn canon_keep(buf: str, keep_root: int) -> str
+    n = len(buf)
+    rel = rel_start(buf)
+    out = ""
+    if rel > 0
+        if keep_root
+            out = slice(buf, 0, rel)
+        else
+            out = "/"
+        end
+    end
+    i = rel
+    first = 1
+    while i < n
+        while i < n and byte_at(buf, i) == 47
+            i += 1
+        end
+        b = i
+        while i < n and byte_at(buf, i) != 47
+            i += 1
+        end
+        if i == b
+            break
+        end
+        if !first
+            out = out + "/"
+        end
+        out = out + slice(buf, b, i)
+        first = 0
+    end
+    if !first and n > rel and byte_at(buf, n - 1) == 47
+        out = out + "/"
+    end
+    return out
+end
+
+fn path_join(first_part: str, ...more: str) -> str
+    buf = first_part
+    keep_root = 0
+    for s in more
+        if len(s) > 0
+            if byte_at(s, 0) != 47 and len(buf) > 0 and byte_at(buf, 0) == 47 and rel_start(buf) == len(buf)
+                keep_root = 1
+            end
+            buf = append_path(buf, s)
+        end
+    end
+    return canon_keep(buf, keep_root)
+end
+
+# the elements std::filesystem walks: the root, each name, and an empty one after a trailing separator. as [start, end, start, end, ...] in p,
+# the root is (-1, -1) and the empty one is (n, n), so no string is made for an element
+fn elem_pairs(p: str) -> arr<int>
+    out = []
+    n = len(p)
+    rel = rel_start(p)
+    if rel > 0
+        append(&out, -1)
+        append(&out, -1)
+    end
+    i = rel
+    while i < n
+        b = i
+        while i < n and byte_at(p, i) != 47
+            i += 1
+        end
+        append(&out, b)
+        append(&out, i)
+        if i < n
+            while i < n and byte_at(p, i) == 47
+                i += 1
+            end
+            if i == n
+                append(&out, n)
+                append(&out, n)
+            end
+        end
+    end
+    return out
+end
+
+# is the element [ab, ae) of a the same as the element [bb, be) of b
+fn elem_eq(a: str, ab: int, ae: int, b: str, bb: int, be: int) -> int
+    if ab < 0 or bb < 0
+        return ab < 0 and bb < 0
+    end
+    if ae - ab != be - bb
+        return 0
+    end
+    k = 0
+    while k < ae - ab
+        if byte_at(a, ab + k) != byte_at(b, bb + k)
+            return 0
+        end
+        k += 1
+    end
+    return 1
+end
+
+fn path_relative(p: str, base: str) -> str
+    if (rel_start(p) > 0) != (rel_start(base) > 0)
+        return ""
+    end
+    pe = elem_pairs(p)
+    be = elem_pairs(base)
+    np = len(pe) / 2
+    nb = len(be) / 2
+    i = 0
+    while i < np and i < nb and elem_eq(p, pe[2 * i], pe[2 * i + 1], base, be[2 * i], be[2 * i + 1])
+        i += 1
+    end
+    if i == np and i == nb
+        return "."
+    end
+    cnt = 0
+    k = i
+    while k < nb
+        bs = be[2 * k]
+        size = be[2 * k + 1] - bs
+        if size == 2 and byte_at(base, bs) == 46 and byte_at(base, bs + 1) == 46
+            cnt -= 1
+        elif size != 0 and !(size == 1 and byte_at(base, bs) == 46)
+            cnt += 1
+        end
+        k += 1
+    end
+    if cnt < 0
+        return ""
+    end
+    if cnt == 0 and (i == np or pe[2 * i + 1] == pe[2 * i])
+        return "."
+    end
+    out = ""
+    k = 0
+    while k < cnt
+        if len(out) > 0
+            out = out + "/"
+        end
+        out = out + ".."
+        k += 1
+    end
+    k = i
+    while k < np
+        if len(out) > 0 and byte_at(out, len(out) - 1) != 47
+            out = out + "/"
+        end
+        out = out + slice(p, pe[2 * k], pe[2 * k + 1])
+        k += 1
+    end
+    return out
+end

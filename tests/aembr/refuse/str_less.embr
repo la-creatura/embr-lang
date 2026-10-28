@@ -1,0 +1,2 @@
+# refuse: the operator < on strings
+print("a" < "b")

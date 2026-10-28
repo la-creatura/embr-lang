@@ -1,0 +1,5 @@
+# refuse: needs a written type
+fn f(a) -> int
+    return 1
+end
+print(f(1))

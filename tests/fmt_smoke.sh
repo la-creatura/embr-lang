@@ -16,6 +16,15 @@ cmp -s "$work/out.embr" "$root/tests/fmt/messy.expected.embr" || { bad "golden o
 out="$("$embr" fmt --check "$root/tests/fmt/messy.embr")"; rc=$?
 [[ $rc -eq 1 && "$out" == *messy.embr* ]] || bad "--check on unformatted file should list it and exit 1 (rc=$rc)"
 
+# function types (fn(int) -> int) open no block
+"$embr" fmt --stdout "$root/tests/fmt/fn_types.embr" | cmp -s - "$root/tests/fmt/fn_types.expected.embr" || bad "function types: golden output differs"
+"$embr" fmt --check "$root/tests/fmt/fn_types.expected.embr" >/dev/null || bad "function types: the expected file is not formatted"
+# lined-up `=` in a run of assignments stays lined up
+"$embr" fmt --stdout "$root/tests/fmt/aligned.embr" | cmp -s - "$root/tests/fmt/aligned.expected.embr" || bad "aligned assignments: golden output differs"
+"$embr" fmt --check "$root/tests/fmt/aligned.expected.embr" >/dev/null || bad "aligned assignments: the expected file is not formatted"
+"$embr" fmt --stdout "$root/tests/fmt/c_text.embr" | cmp -s - "$root/tests/fmt/c_text.expected.embr" || bad "c text: golden output differs"
+"$embr" fmt --check "$root/tests/fmt/c_text.expected.embr" >/dev/null || bad "c text: the expected file is not formatted"
+
 # in place, then again: the second run changes nothing
 cp "$root/tests/fmt/messy.embr" "$work/a.embr"
 "$embr" fmt "$work/a.embr" || bad "in-place format failed"

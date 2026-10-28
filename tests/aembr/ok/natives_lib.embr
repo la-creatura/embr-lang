@@ -1,0 +1,71 @@
+# the natives of embrlib that compile: same answers, same errors as the VM
+import "embrlib"
+fn show_error(f: fn())
+    try
+        f()
+    catch e
+        print(e["kind"] + ": " + e["message"])
+    end
+end
+
+print(type(1), type(1.5), type("s"), type([1]), type({"a": 1}))
+print(num("3.5") + num("-2") + num("1e2"))
+print(num("12abc"))
+show_error(fn() num("abc") end)
+show_error(fn() num("") end)
+show_error(fn() num("+5") end)
+
+s = "hello world"
+print(slice(s, 6))
+print(slice(s, 0, 5))
+print(slice(s, -3))
+print(slice(s, 3, 100))
+print(slice(s, 8, 2) == "")
+xs = [10, 20, 30, 40, 50]
+print(slice(xs, 1, 3)[0], len(slice(xs, 2)), len(slice(xs, 9)), len(slice(xs, -2, 99)))
+words = ["a", "b", "c"]
+print(join(slice(words, 1), ""))
+
+print(index_of(xs, 30), index_of(xs, 31))
+print(index_of([1.5, 2.5], 2.5), index_of(words, "c"), index_of(words, "z"))
+print(sum(xs), sum([0.5, 0.25]), sum([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+print(min(xs), max(xs), min([2.5, 1.5]), max([2.5, 1.5, 9.0]))
+local arr<int> none = []
+show_error(fn() min(none) end)
+show_error(fn() max(none) end)
+empty = [0.0]
+print(len(sort([5, 3, 9, 1])), sort([5, 3, 9, 1])[0], sort([5, 3, 9, 1])[3])
+print(sort([5, 3, 9, 1], 1)[0], sort([2.5, 0.5, 1.5])[0], sort([2.5, 0.5, 1.5], 1)[0])
+print(reverse("abc"), reverse(xs)[0], join(reverse(words), ","))
+print(len(concat(xs, [1, 2])), concat("ab", "cd", "ef"), join(concat(words, ["d"]), ""))
+print(join(pop(words), ""), len(pop([1])))
+show_error(fn() pop(none) end)
+print(has(xs, 4), has(xs, 5), has(xs, -1), has({"k": 1}, "k"), has({"k": 1}, "z"))
+
+ys = [1, 2, 3]
+print(remove_last(&ys), len(ys))
+print(remove_at(&ys, 0), ys[0])
+print(insert(&ys, 0, 7), insert(&ys, 2, 8), ys[0], ys[1], ys[2])
+fs = [1.5, 2.5]
+print(remove_last(&fs), insert(&fs, 1, 9.5), fs[1])
+ss = ["x", "y"]
+print(insert(&ss, 1, "m"), remove_at(&ss, 0), join(ss, ""), remove_last(&ss))
+show_error(fn() remove_last(&empty) end)
+zs = [1]
+show_error(fn() remove_at(&zs, 3) end)
+show_error(fn() insert(&zs, 5, 1) end)
+other = ys
+remove_last(&ys)
+print(len(other), len(ys))
+m = {"a": 1, "b": 2, "c": 3}
+print(remove_key(&m, "b"), remove_key(&m, "b"), len(m), has(m, "a"), has(m, "c"), has(m, "b"))
+m2 = {}
+m2["x"] = 1
+m2["y"] = 2
+m2["z"] = 3
+remove_key(&m2, "x")
+m2["w"] = 4
+print(join(keys(m2), ","))
+copy = m2
+remove_key(&m2, "w")
+print(len(copy), len(m2))

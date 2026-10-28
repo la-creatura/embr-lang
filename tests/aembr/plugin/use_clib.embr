@@ -1,0 +1,15 @@
+import "clib"
+import "embrlib"
+print(hyp(3.0, 4.0))
+print(shout("hello, c"))
+print(prime(4))
+print(scale(6))
+try
+    prime(9)
+catch e
+    print(e["message"])
+end
+print(tag(2))
+print(tag(2, 3))
+print(tag(2, 3, "k"))
+print(rewrite("ab"))

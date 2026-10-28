@@ -1,0 +1,26 @@
+# a closure that calls itself through the variable that holds it, in a function and at the top level (no leak, see the sanitizer step)
+import "embrlib"
+fn f(n: int) -> int
+    fact = fn(k: int) -> int
+        if k < 2
+            return 1
+        end
+        return k * fact(k - 1)
+    end
+    return fact(n)
+end
+print(f(10))
+fib = fn(n: int) -> int
+    if n < 2
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+print(fib(20))
+i = 0
+total = 0
+while i < 100
+    total = total + f(5)
+    i = i + 1
+end
+print(total)

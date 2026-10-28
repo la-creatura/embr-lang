@@ -1,0 +1,5 @@
+__module__ = {"name": "chain", "version": "1.0.0", "description": "a plugin that calls another plugin", "capabilities": []}
+import "withmod"
+fn ninefold(x: int) -> int
+    return triple(triple(x))
+end

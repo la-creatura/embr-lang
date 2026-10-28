@@ -1,0 +1,10 @@
+# some types written, the rest worked out
+import "embrlib"
+fn scale(x: float, k)
+    return x * k
+end
+fn label(n) -> str
+    return "n=" + str(n)
+end
+print(scale(2.5, 2.0))
+print(label(3))

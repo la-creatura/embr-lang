@@ -1,0 +1,194 @@
+# std/embrmath.embr: the natives of the `embrmath` plugin, written in aembr (see std/str.embr). PI and E stay in the compiler.
+#
+# good to know
+#   - a native that takes an int or a float is a `const fn`: one version is written for each type, as the plugin has a member for each (the kind of an error
+#     is the name of the member: math_abs__1 for ints, __2 for floats)
+#   - math_floor, math_ceil and math_round give an int, and raise when a float does not fit one (the plugin gives a float, a typed program cannot have that)
+import "embrlib"
+
+c file """
+#include <math.h>
+#include <stdint.h>
+static int64_t std_whole(RtCtx* cx, const char* fn, double d) {
+    if (d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
+    char buf[64];
+    rt_fmt_f64(buf, sizeof buf, d);
+    rt_raise(cx, fn, 0, "the result (%s) does not fit an int", buf);
+    return 0;
+}
+static int64_t std_abs_i(RtCtx* cx, int64_t x) {
+    if (x == INT64_MIN) { rt_raise(cx, "math_abs__1", 0, "the smallest int has no int absolute value"); return 0; }
+    return x < 0 ? -x : x;
+}
+static int64_t std_clamp_i(RtCtx* cx, int64_t x, int64_t lo, int64_t hi) {
+    if (lo > hi) { rt_raise(cx, "math_clamp__1", 0, "lo (%lld) must not exceed hi (%lld)", (long long)lo, (long long)hi); return 0; }
+    return x < lo ? lo : x > hi ? hi : x;
+}
+static double std_clamp_f(RtCtx* cx, double x, double lo, double hi) {
+    if (lo > hi) {
+        char a[64], b[64];
+        rt_fmt_f64(a, sizeof a, lo); rt_fmt_f64(b, sizeof b, hi);
+        rt_raise(cx, "math_clamp__2", 0, "lo (%s) must not exceed hi (%s)", a, b);
+        return 0.0;
+    }
+    return x < lo ? lo : x > hi ? hi : x;
+}
+"""
+
+fn math_sqrt(x: num) -> float
+    r = 0.0
+    c """
+        $r = sqrt($x);
+    """
+    return r
+end
+
+fn math_pow(x: num, y: num) -> float
+    r = 0.0
+    c """
+        $r = pow($x, $y);
+    """
+    return r
+end
+
+fn math_sin(x: num) -> float
+    r = 0.0
+    c """
+        $r = sin($x);
+    """
+    return r
+end
+
+fn math_cos(x: num) -> float
+    r = 0.0
+    c """
+        $r = cos($x);
+    """
+    return r
+end
+
+fn math_tan(x: num) -> float
+    r = 0.0
+    c """
+        $r = tan($x);
+    """
+    return r
+end
+
+fn math_asin(x: num) -> float
+    r = 0.0
+    c """
+        $r = asin($x);
+    """
+    return r
+end
+
+fn math_acos(x: num) -> float
+    r = 0.0
+    c """
+        $r = acos($x);
+    """
+    return r
+end
+
+fn math_atan(x: num) -> float
+    r = 0.0
+    c """
+        $r = atan($x);
+    """
+    return r
+end
+
+fn math_atan2(y: num, x: num) -> float
+    r = 0.0
+    c """
+        $r = atan2($y, $x);
+    """
+    return r
+end
+
+fn math_log(x: num) -> float
+    r = 0.0
+    c """
+        $r = log($x);
+    """
+    return r
+end
+
+fn math_log2(x: num) -> float
+    r = 0.0
+    c """
+        $r = log2($x);
+    """
+    return r
+end
+
+fn math_log10(x: num) -> float
+    r = 0.0
+    c """
+        $r = log10($x);
+    """
+    return r
+end
+
+fn math_exp(x: num) -> float
+    r = 0.0
+    c """
+        $r = exp($x);
+    """
+    return r
+end
+
+const fn math_abs(x)
+    r = x
+    c """
+        $r = _Generic($x, int64_t: std_abs_i(cx, (int64_t)($x)), default: fabs((double)($x)));
+    """
+    return r
+end
+
+const fn math_floor(x)
+    r = 0
+    c """
+        $r = _Generic($x, int64_t: (int64_t)($x), default: std_whole(cx, "math_floor__2", floor((double)($x))));
+    """
+    return r
+end
+
+const fn math_ceil(x)
+    r = 0
+    c """
+        $r = _Generic($x, int64_t: (int64_t)($x), default: std_whole(cx, "math_ceil__2", ceil((double)($x))));
+    """
+    return r
+end
+
+const fn math_round(x)
+    r = 0
+    c """
+        $r = _Generic($x, int64_t: (int64_t)($x), default: std_whole(cx, "math_round__2", round((double)($x))));
+    """
+    return r
+end
+
+const fn math_min(a, b)
+    if b < a
+        return b
+    end
+    return a
+end
+
+const fn math_max(a, b)
+    if b > a
+        return b
+    end
+    return a
+end
+
+const fn math_clamp(x, lo, hi)
+    r = x
+    c """
+        $r = _Generic($x, int64_t: std_clamp_i(cx, (int64_t)($x), (int64_t)($lo), (int64_t)($hi)), default: std_clamp_f(cx, (double)($x), (double)($lo), (double)($hi)));
+    """
+    return r
+end

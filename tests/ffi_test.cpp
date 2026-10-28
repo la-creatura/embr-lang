@@ -25,6 +25,25 @@ int main() {
           "ffi_callback_free(cb)\n",
           "11\n3\n" },
 
+        { "ffi_callback: returns a struct by value (small, in registers, and big, through memory)",
+          "S = struct_type([[\"a\", type_i32()], [\"b\", type_i32()]])\n"
+          "B = struct_type([[\"x\", type_f64()], [\"y\", type_i64()], [\"p\", type_ptr()], [\"z\", type_f64()]])\n"
+          "cs = ffi_callback(fn(n) return {a: n, b: n * 2} end, S, [type_i32()])\n"
+          "cb = ffi_callback(fn(n) return {x: 1.5, y: n, p: ptr_null(), z: 2.5} end, B, [type_i64()])\n"
+          "r = ffi_call(ffi_fn(cs), S, [type_i32()], [21])\n"
+          "print(r[\"a\"])\nprint(r[\"b\"])\n"
+          "q = ffi_call(ffi_fn(cb), B, [type_i64()], [7])\n"
+          "print(q[\"x\"])\nprint(q[\"y\"])\nprint(q[\"z\"])\n"
+          "ffi_callback_free(cs)\nffi_callback_free(cb)\n",
+          "21\n42\n1.5\n7\n2.5\n" },
+
+        { "ffi_callback: a struct result with a missing field raises from the call",
+          "S = struct_type([[\"a\", type_i32()], [\"b\", type_i32()]])\n"
+          "cs = ffi_callback(fn(n) return {a: n} end, S, [type_i32()])\n"
+          "try\nffi_call(ffi_fn(cs), S, [type_i32()], [1])\ncatch e\nprint(e[\"message\"])\nend\n"
+          "ffi_callback_free(cs)\n",
+          "struct 'struct<a:i32,b:i32>' missing field 'b'\n" },
+
         { "ffi_fn: a null address is refused",
           "try\n"
           "ffi_fn(ptr_null())\n"

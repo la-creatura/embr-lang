@@ -1,0 +1,13 @@
+import "embrlib"
+fn check(n: int)
+    if n > 2
+        error("too big: " + str(n))
+    end
+end
+fn run(n: int)
+    check(n)
+end
+print(1)
+run(1)
+run(5)
+print(2)

@@ -1,0 +1,5 @@
+fn get(xs: arr<int>, i: int) -> int
+    return xs[i]
+end
+print(get([1], 0))
+print(get([1], -1))

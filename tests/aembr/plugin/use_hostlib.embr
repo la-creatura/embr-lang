@@ -1,0 +1,9 @@
+import "hostlib"
+print(host_count([1, 2, 3]), host_count([]), host_count([[1], [2, 3]]))
+print(host_sum([1, 2, 3, 4]), host_sum([10]))
+print(host_first([7, 8]), host_first([]))
+print(host_range(5), host_range(0))
+print(host_echo([1, "a", [2.5, {"k": [3]}]]))
+print(host_echo({"x": 1, "y": "two"}))
+print(host_echo("plain"), host_echo(42))
+print(host_pair([1, 2], 7), host_pair("a", 0))

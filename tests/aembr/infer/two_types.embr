@@ -1,0 +1,5 @@
+fn f(x)
+    return x
+end
+print(f(1))
+print(f(1.5))

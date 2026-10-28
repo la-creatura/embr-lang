@@ -1,0 +1,38 @@
+import "embrlib"
+import "@LIB@"
+# many paths, every function: the output of the C plugin and the aembr one has to be identical
+parts = ["", "/", "a", "b", ".", "..", "x.tar.gz", ".hidden", "//", "a/", "/a", "a//b", "a/./b", "a/../b", "../a", "a.", "..."]
+paths = []
+for p in parts
+    append(&paths, p)
+    for q in parts
+        append(&paths, p + "/" + q)
+        append(&paths, p + q)
+    end
+end
+for p in parts
+    for q in parts
+        for r in parts
+            append(&paths, p + "/" + q + "/" + r)
+        end
+    end
+end
+count = 0
+checksum = 0
+for p in paths
+    line = path_basename(p) + "|" + path_dirname(p) + "|" + path_extname(p) + "|" + path_stem(p) + "|" + str(path_is_abs(p)) + "|" + path_normalize(p)
+    count += 1
+    if count % 97 == 0
+        print(p, "=>", line)
+    end
+    checksum = (checksum * 31 + len(line)) % 1000003
+end
+print(count, checksum)
+n = 0
+for p in parts
+    for q in parts
+        print(p, q, path_join(p, q), path_join(p, q, p), path_relative(p, q), path_relative(p + "/" + q, p))
+        n += 1
+    end
+end
+print(n)

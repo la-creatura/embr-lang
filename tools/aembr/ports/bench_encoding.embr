@@ -1,0 +1,63 @@
+import "embrlib"
+import "time"
+import "@LIB@"
+# usage: embr bench_encoding.embr. prints best-of-3 milliseconds. the big string is 1 MB, the small calls work on 24 bytes
+fn mb(n: int) -> str
+    s = ""
+    chunk = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ+/"
+    i = 0
+    while i < n * 16384
+        s = s + chunk
+        i += 1
+    end
+    return s
+end
+fn best(f: fn(), reps: int) -> float
+    b = 1000000.0
+    r = 0
+    while r < reps
+        t0 = time_monotonic()
+        f()
+        t = (time_monotonic() - t0) * 1000.0
+        if t < b
+            b = t
+        end
+        r += 1
+    end
+    return b
+end
+big = mb(1)
+small = "hello, embr world!!!!!!"
+enc = base64_encode(big, 0, 0)
+hx = hex_encode(big)
+fn row(label, ms)
+    print(str_pad_right(label, 28), num_fixed(ms, 2), "ms")
+end
+import "str"
+row("hex_encode 1 MB", best(fn() hex_encode(big) end, 3))
+row("hex_decode 2 MB", best(fn() hex_decode(hx) end, 3))
+row("base64_encode 1 MB", best(fn() base64_encode(big, 0, 0) end, 3))
+row("base64_decode 1.4 MB", best(fn() base64_decode(enc, 0) end, 3))
+row("sha256 1 MB", best(fn() sha256(big) end, 3))
+row("crc32 1 MB", best(fn() crc32(big) end, 3))
+row("200k x hex_encode small", best(fn()
+    i = 0
+    while i < 200000
+        hex_encode(small)
+        i += 1
+    end
+end, 3))
+row("200k x crc32 small", best(fn()
+    i = 0
+    while i < 200000
+        crc32(small)
+        i += 1
+    end
+end, 3))
+row("50k x sha256 small", best(fn()
+    i = 0
+    while i < 50000
+        sha256(small)
+        i += 1
+    end
+end, 3))

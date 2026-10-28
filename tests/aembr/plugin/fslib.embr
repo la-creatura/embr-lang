@@ -1,0 +1,22 @@
+__module__ = {
+    "version": "0.1.0",
+    "description": "a compiled plugin that calls C plugins",
+    "capabilities": ["filesystem"],
+}
+
+import "embrlib"
+import "fs"
+import "encoding"
+
+# whether the root folder is a folder
+fn root_is_dir() -> int
+    return fs_is_dir("/")
+end
+
+fn hex_twice(s: str) -> str
+    return hex_encode(hex_encode(s))
+end
+
+fn bad_hex(s: str) -> str
+    return hex_decode(s)
+end

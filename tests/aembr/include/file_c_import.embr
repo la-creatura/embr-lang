@@ -1,0 +1,13 @@
+# const c file import puts a C file at the top of the generated C, c file does the same with text written here
+const c file import "triple.h"
+c file """
+static int64_t plus_one(int64_t n) { return n + 1; }
+"""
+fn go(n: int) -> int
+    r = 0
+    c """
+        $r = plus_one(triple_it($n));
+    """
+    return r
+end
+print(go(5))

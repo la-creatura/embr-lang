@@ -1,0 +1,20 @@
+import "embrlib"
+import "json"
+import "@LIB@"
+print(describe(5), describe("s"), describe([1, "a"]), describe({"k": 1.5}))
+print(wrap(7))
+print(wrap([1, 2]))
+print(json_stringify(wrap({"a": [1, 2]})))
+doc = json_parse("{\"count\": 1, \"items\": [0, 1]}")
+print(bump(doc), doc)
+print(sum_grid([[1, 2], [3, 4]]))
+print(transpose([[1, 2, 3], [4, 5, 6]]))
+print(group(["apple", "avocado", "banana", "blueberry", "cherry"]))
+try
+    print(sum_grid(json_parse("[[1, 2], [\"x\"]]")))
+catch e
+    print("rejected")
+end
+flags = json_parse("[true, false, null]")
+print(describe(flags[0]), describe(flags[2]))
+print(wrap(flags[1]))

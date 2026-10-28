@@ -1,0 +1,14 @@
+# C text can raise an error the way compiled code does, and the error can be caught
+fn check(n: int) -> int
+    c """
+        if ($n > 3) { rt_raise(cx, "error", 0, "too big: %lld", (long long)$n); }
+    """
+    return n
+end
+
+try
+    print(check(2))
+    print(check(9))
+catch e
+    print(e["message"])
+end

@@ -75,7 +75,7 @@ endforeach()
 
 add_dependencies(test_core       embrlib_plugin)
 add_dependencies(test_bytecode   embrlib_plugin)
-add_dependencies(test_str        str_plugin)
+add_dependencies(test_str        str_plugin embrlib_plugin)
 add_dependencies(test_unicode    unicode_plugin)
 add_dependencies(test_json       json_plugin embrlib_plugin)
 add_dependencies(test_embrtypes  embrtypes_plugin ffi_plugin)
@@ -162,9 +162,9 @@ if(PYTHON3_EXE)
     set_tests_properties(docs_examples PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
-# differential test: the Pike-VM regex engine (plugins/regex/pike.h) vs std::regex on random patterns.
+# differential test: the regex engine (plugins/regex/rx.c) vs std::regex on random patterns.
 # standalone (no embr header / plugins needed), so it is a plain executable
-add_executable(test_regex_engine regex_engine_test.cpp)
+add_executable(test_regex_engine regex_engine_test.cpp ${CMAKE_SOURCE_DIR}/plugins/regex/rx.c)
 set_target_properties(test_regex_engine PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${BIN_DIR}/tests")
 add_test(NAME regex_engine_diff COMMAND test_regex_engine)
 set_tests_properties(regex_engine_diff PROPERTIES SKIP_RETURN_CODE 77)
@@ -174,6 +174,17 @@ if(BASH_EXE AND NOT WIN32)
     foreach(backend ${EMBR_BACKENDS})
         add_test(NAME cli_smoke_${backend} COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/cli_smoke.sh $<TARGET_FILE:embr> --backend=${backend})
     endforeach()
+endif()
+
+# aembr: programs built by it match the VM, refusals, runtime errors, same input same output (see aembr_smoke.sh)
+if(BASH_EXE AND NOT WIN32 AND TARGET aembr)
+    add_test(NAME aembr_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/aembr_smoke.sh $<TARGET_FILE:aembr> $<TARGET_FILE:embr> ${CMAKE_CURRENT_SOURCE_DIR}/aembr)
+    add_test(NAME aembr_package_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/aembr_package_smoke.sh $<TARGET_FILE:aembr> $<TARGET_FILE:embr> ${CMAKE_CURRENT_SOURCE_DIR}/aembr)
+    add_test(NAME aembr_plugin_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/aembr_plugin_smoke.sh $<TARGET_FILE:aembr> $<TARGET_FILE:embr> ${CMAKE_CURRENT_SOURCE_DIR}/aembr)
+    add_test(NAME aembr_ports_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/aembr_ports_smoke.sh $<TARGET_FILE:aembr> $<TARGET_FILE:embr> ${CMAKE_SOURCE_DIR}/tools/aembr/ports)
+    add_test(NAME aembr_stats_smoke COMMAND ${BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/aembr_stats_smoke.sh $<TARGET_FILE:aembr> ${CMAKE_SOURCE_DIR})
+    # it builds and runs a few hundred C programs: well over the 120 s ci gives a test by default
+    set_tests_properties(aembr_smoke PROPERTIES TIMEOUT 600)
 endif()
 
 # the .vmbr cache of compiled scripts: written only with --cache-dir, reused while unchanged, damage is a miss (see bytecode_smoke.sh)

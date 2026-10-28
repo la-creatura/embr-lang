@@ -1,0 +1,3 @@
+# refuse: is a C++ plugin
+import "table"
+print(1)

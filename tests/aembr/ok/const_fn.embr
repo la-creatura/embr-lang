@@ -1,0 +1,52 @@
+import "embrlib"
+# a const fn is written out for each call by the VM, and here once for each combination of argument types it is called with
+const fn square(x)
+    return x * x
+end
+const fn clamp_low(v, lo)
+    if v < lo
+        return lo
+    end
+    return v
+end
+const fn twice(s)
+    return s + s
+end
+const fn sum_sq(a, b)
+    return square(a) + square(b)
+end
+const fn first_of(list)
+    return list[0]
+end
+const fn fact(n)
+    if n < 2
+        return 1
+    end
+    return n * fact(n - 1)
+end
+const fn bump(n)
+    local total = 0
+    local i = 0
+    while i < n
+        total += i
+        i += 1
+    end
+    return total
+end
+const fn shout(msg: str)
+    print(msg + "!")
+end
+print(square(7), square(2.5))
+print(clamp_low(3, 5), clamp_low(9, 5), clamp_low(1.5, 2.0))
+print(twice("ab"), twice(21), twice(1.25))
+print(sum_sq(3, 4), sum_sq(1.5, 2.0))
+print(first_of([10, 20]), first_of(["x", "y"]), first_of([[1, 2], [3]]))
+print(fact(5))
+print(bump(5), bump(4))
+shout("hi")
+try
+    print(first_of(["a"]), first_of([[1]]))
+    print(clamp_low(1, 2) / 0)
+catch e
+    print(e["message"], e["kind"])
+end

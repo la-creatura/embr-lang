@@ -1,0 +1,48 @@
+import "embrlib"
+import "@LIB@"
+# the same calls for the C plugin and the aembr one; the output has to be identical
+docs = ["null", "true", "false", "0", "-0", "12", "-12", "1.5", "-1.25e3", "1E2", "9223372036854775807", "-9223372036854775808", "9223372036854775808", "123456789012345678901234567890",
+        "\"\"", "\"abc\"", "\"a\\nb\\t\\\"q\\\" \\\\ \\/ \\b \\f \\r\"", "\"\\u00e9\\u4e2d\\ud83d\\ude00\"", "[]", "{}", "[1, 2, 3]", "[[], [[]], {}]", "{\"a\": 1, \"b\": [true, null, false], \"c\": {\"d\": \"e\"}}",
+        " \t\n[ 1 ,\n 2 ] \r\n", "{\"z\": 1, \"a\": 2, \"m\": {\"k\": [1, {\"x\": null}]}}", "[1.0, 2.50, 0.1, 1e-7, 100000000000000000000.0]", "\"raw \xc3\xa9 bytes\"",
+        "", "   ", "[", "[1,", "[1 2]", "{", "{\"a\"}", "{\"a\": }", "{1: 2}", "tru", "nul", "nulx", "01", "-", "1.", "1.e5", "1e", "1e+", "+1", ".5", "\"abc", "\"a\\x\"", "\"\\u12\"", "\"\\u12g4\"", "\"\\ud800\"", "\"\\udc00\"", "\"\\ud800\\u0041\"",
+        "1e999", "-1e999", "1e-999", "5e-324", "2.2250738585072014e-308", "[1] x", "{\"a\": 1,}", "[1,]", "[01]", "\n\n  ?"]
+for t in docs
+    try
+        v = json_parse(t)
+        print("ok", json_valid(t), json_stringify(v, 0), json_stringify(v, 2))
+    catch e
+        print("error", json_valid(t), e["kind"], e["message"])
+    end
+end
+deep = ""
+i = 0
+while i < 1000
+    deep = deep + "["
+    i += 1
+end
+deep = deep + "1"
+i = 0
+while i < 1000
+    deep = deep + "]"
+    i += 1
+end
+try
+    print(len(json_stringify(json_parse(deep), 0)))
+catch e
+    print(e["kind"], e["message"])
+end
+try
+    print(len(json_stringify(json_parse("[" + deep + "]"), 0)))
+catch e
+    print(e["kind"], e["message"])
+end
+values = [1, 2.5, "text", [1, "a", [2.5]], {"k": [1, 2], "a": "b"}, "quote\" back\\ ctl\x01 nl\n tab\t bell\x07", "\xc3\xa9\xe4\xb8\xad", [], {}, -3, 1e20, 0.1 + 0.2]
+for v in values
+    print(json_stringify(v, 0), json_stringify(v, 1), json_stringify(v, 4))
+end
+try
+    print(json_stringify("bad \xff byte", 0))
+catch e
+    print(e["kind"], e["message"])
+end
+print(json_stringify(json_parse("[true, false, null, {\"a\": null}]"), 2))

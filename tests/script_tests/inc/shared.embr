@@ -1,0 +1,6 @@
+# included by test_const_import.embr
+const import "shared_inner.embr"
+fn shared_twice(n)
+    return shared_inner(n) * 2
+end
+shared_name = "shared"

@@ -1,0 +1,7 @@
+# a function of a module writes the globals of its own module, and makes a local of any other name
+import "embrlib"
+q = "mine"
+import "mod/temps.embr"
+print(use_temp(), q)
+q = q + "!"
+print(use_temp(), q)

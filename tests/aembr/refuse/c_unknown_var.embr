@@ -1,0 +1,6 @@
+# refuse: is not a variable of this function
+x = 1
+c """
+    $nope = 1;
+"""
+print(x)

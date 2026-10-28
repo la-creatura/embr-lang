@@ -1,0 +1,56 @@
+import "embrlib"
+# functions that call a function for each element. a lambda written in the call takes its parameter types from the call
+nums = [1, 2, 3, 4, 5, 6]
+print(filter(nums, fn(x) return x % 2 == 0 end))
+print(for_each_do(nums, fn(x) return x * x end))
+print(reduce(nums, fn(a, x) return a + x end, 100))
+print(any_do(nums, fn(x) return x > 5 end), any_do(nums, fn(x) return x > 6 end))
+print(all_do(nums, fn(x) return x > 0 end), all_do(nums, fn(x) return x > 1 end))
+print(count_do(nums, fn(x) return x > 2 end))
+print(find_index_do(nums, fn(x) return x > 3 end), find_index_do(nums, fn(x) return x > 30 end))
+print(find_do(nums, fn(x) return x > 3 end), find_do(nums, fn(x) return x > 30 end, -1))
+try
+    find_do(nums, fn(x) return x > 30 end)
+catch e
+    print(e["message"], e["kind"])
+end
+
+fn is_big(n: int) -> int
+    return n > 3
+end
+print(filter(nums, is_big))
+words = ["apple", "fig", "banana"]
+print(filter(words, fn(w) return len(w) > 3 end))
+print(for_each_do(words, fn(w) return len(w) end))
+print(reduce(words, fn(acc, w) return acc + w end, ">"))
+scale = 10
+print(for_each_do(nums, fn(x) return x * scale end))
+fl = [1.5, 2.5]
+print(reduce(fl, fn(a, x) return a + x end, 0.0))
+print(filter(fl, fn(x) return x > 2.0 end))
+w = ["bb", "aa", "c", "dd", "e", "ff"]
+print(sort_cmp(w, fn(a, b) return len(a) - len(b) end))
+print(sort_cmp(w, fn(a, b) return len(a) - len(b) end, 1))
+print(sort_do(w, fn(a) return len(a) end))
+print(sort_do(w, fn(a) return len(a) end, 1))
+print(sort_cmp([3, 1, 2], fn(a, b) return b - a end))
+print(sort_cmp([2.5, 1.5, 3.5], fn(a, b) return a - b end))
+print(sort_do([3, 1, 2], fn(x) return 0.5 * x end))
+fn by_length(a: str, b: str) -> int
+    return len(a) - len(b)
+end
+print(sort_cmp(w, by_length))
+print(partition(nums, fn(x) return x > 2 end))
+print(partition(words, fn(w) return len(w) > 3 end))
+print(min_do(words, fn(w) return len(w) end), max_do(words, fn(w) return len(w) end))
+print(min_do(nums, fn(x) return 10 - x end), max_do(nums, fn(x) return 10 - x end))
+print(max_do([1.5, 0.5], fn(x) return x end))
+local arr<int> none = []
+try
+    min_do(none, fn(x) return x end)
+catch e
+    print(e["message"], e["kind"])
+end
+print(group_by(nums, fn(x) return x % 3 end))
+print(group_by(words, fn(w) return w[0] end))
+print(group_by(words, fn(w) return len(w) end))

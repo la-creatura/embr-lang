@@ -1,0 +1,39 @@
+__module__ = {
+    "version": "1.2.0",
+    "description": "numbers, written in embr and compiled by aembr",
+    "capabilities": [],
+}
+
+SCALE = 3
+OFFSET = 0.5
+
+# n times the scale
+fn scaled(n: int) -> int
+    return n * SCALE
+end
+
+# the square of the distance from the origin, plus a small offset
+fn dist2(a: float, b: float) -> float
+    return a * a + b * b + OFFSET
+end
+
+fn fib(n: int) -> int
+    if n < 2
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+
+# a / b, which raises when b is zero
+fn divide(a: int, b: int) -> float
+    return a / b
+end
+
+fn __twice(n: int) -> int
+    return n + n
+end
+
+# four times n, through a helper that stays inside
+fn quad(n: int) -> int
+    return __twice(__twice(n))
+end

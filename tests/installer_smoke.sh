@@ -43,6 +43,18 @@ b="$work/home/.local/bin/embr"
 out="$(cd "$work" && env -u EMBR_PATH "$b" t.embr 2>/dev/null)"
 [[ "$out" == "OK" ]] || bad "the installed embr could not load a plugin: '$out'"
 [[ "$("$b" --version)" == "embr $version "* ]] || bad "--version is wrong: $("$b" --version)"
+# aembr: the command, and it finds its runtime in the installed layout
+if [[ -x "$work/stage/$name/bin/aembr" ]]; then
+    ab="$work/home/.local/bin/aembr"
+    [[ -L "$ab" ]] || bad "no aembr link in ~/.local/bin"
+    if command -v cc >/dev/null; then
+        printf 'print("from aembr")\n' > "$work/a.embr"
+        out="$(cd "$work" && env -u EMBR_PATH -u AEMBR_RT_DIR "$ab" run a.embr 2>&1)"
+        [[ "$out" == *"from aembr"* ]] || bad "the installed aembr could not build and run a script: $out"
+    else
+        echo "note: no cc, the aembr build check was skipped"
+    fi
+fi
 grep -q '^# >>> embr >>>$' "$work/home/.bashrc" || bad "no embr block in .bashrc"
 [[ "$(grep -c '>>> embr >>>' "$work/home/.bashrc")" == 1 ]] || bad "more than one block in .bashrc"
 head -n 2 "$work/home/.bashrc" | cmp -s - <(printf 'alias ll="ls -l"\nexport FOO=1\n') || bad "the first lines of .bashrc changed"
@@ -94,6 +106,7 @@ echo 'x' > "$d/embr/extra/plugins/mine.so"
 "$d/embr/uninstall.sh" >"$work/out" 2>&1 || bad "uninstall failed: $(cat "$work/out")"
 [[ "$(cat "$work/home/.bashrc")" == "$(cat "$work/bashrc.orig")" ]] || bad ".bashrc is not back to what it was: $(cat "$work/home/.bashrc")"
 [[ ! -e "$b" && ! -L "$b" ]] || bad "the embr link is still there"
+[[ ! -L "$work/home/.local/bin/aembr" ]] || bad "the aembr link is still there"
 [[ -f "$d/embr/extra/plugins/mine.so" ]] || bad "uninstall deleted the user's own plugin"
 leftover="$(tree_now | diff "$work/tree.orig" - | grep '^>' | grep -v '/embr/extra' | grep -v '/\.local\(/share\)\?\(/embr\)\?$' || true)"
 [[ -z "$leftover" ]] || bad "uninstall left files behind: $leftover"
@@ -115,6 +128,12 @@ cmp -s "$work/home/.bashrc" "$work/bashrc.orig" || bad "--no-modify-path changed
 [[ ! -e "$d/applications" && ! -e "$d/mime" && ! -e "$d/icons" ]] || bad "--no-desktop still wrote desktop files"
 grep -q 'export EMBR_PATH' "$work/out" || bad "--no-modify-path did not say what to add"
 "$d/embr/uninstall.sh" >/dev/null 2>&1 || bad "uninstall after options failed"
+
+# --no-aembr leaves the aembr command out
+fresh_home
+inst sh "$src/install.sh" --from "$work/dl/$name.tar.gz" --no-aembr >/dev/null 2>&1 || bad "install with --no-aembr failed"
+[[ ! -e "$work/home/.local/bin/aembr" ]] || bad "--no-aembr still linked aembr"
+"$d/embr/uninstall.sh" >/dev/null 2>&1
 
 # a command that is not ours is never replaced
 fresh_home

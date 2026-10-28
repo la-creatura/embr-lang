@@ -1,0 +1,17 @@
+# a function of an imported module writes the globals of its own module, and makes a local of any other name: a temporary
+# of library code does not clobber the importing script's variable of the same name
+import "testing.embr"
+import "embrlib"
+
+q = "mine"
+import "inc/mod_temp.embr"
+
+fn test_a_temporary_in_a_module_function_is_a_local()
+    assert_eq(use_temp(), 6)
+    assert_eq(q, "mine")
+end
+
+fn test_a_module_function_still_writes_its_own_globals()
+    assert_eq(bump(), 1)
+    assert_eq(bump(), 2)
+end

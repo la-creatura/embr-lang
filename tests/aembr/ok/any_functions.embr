@@ -1,0 +1,66 @@
+import "embrlib"
+import "json"
+# any in parameters and results, and the checks where an any meets a type
+fn describe(x: any) -> str
+    return str(x) + " is " + type(x)
+end
+fn first(list: any) -> any
+    return list[0]
+end
+fn as_int(x: any) -> int
+    return x
+end
+fn pick(flag: int, a: any, b: any) -> any
+    if flag
+        return a
+    end
+    return b
+end
+print(describe(1), describe(2.5), describe("s"), describe([1, 2]), describe({"k": 1}))
+print(first([5, 6]), first(["a"]), first(json_parse("[[7]]")))
+print(as_int(first([5, 6])))
+print(pick(1, "yes", 2), pick(0, "yes", 2))
+text = json_stringify([1, "two", 3.5, [4, 5], {"six": 6}])
+print(text)
+back = json_parse(text)
+print(back, back == json_parse(text), len(back))
+print(json_stringify(json_parse("{\"b\": [1, {\"c\": null}], \"a\": \"x\"}")))
+try
+    print(as_int("text"))
+catch e
+    print(e["message"])
+end
+try
+    local int n = back[1]
+catch e
+    print(e["message"])
+end
+x = 5
+try
+    x = back[1]
+catch e
+    print(e["message"])
+end
+fn bad() -> int
+    return back[1]
+end
+try
+    print(bad())
+catch e
+    print(e["message"])
+end
+fn thrower(n: int)
+    error("deep " + str(n))
+end
+fn mid(n: int)
+    thrower(n + 1)
+end
+try
+    mid(1)
+catch e
+    print(len(e["trace"]), e["trace"][0]["fn"], e["trace"][1]["fn"], e["trace"][0]["line"], type(e["trace"][0]["line"]), type(e["trace"][0]["file"]))
+end
+table = {"a": [1, 2, 3], "b": ["x"], "c": {"deep": [1.5]}}
+print(table["c"]["deep"][0], len(table["a"]), table)
+table["a"][1] = "two"
+print(table["a"])

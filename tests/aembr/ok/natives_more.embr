@@ -1,0 +1,53 @@
+import "embrlib"
+# take, chunk, unique, zip, flatten, enumerate, range, assert, and the map helpers
+print(take([1, 2, 3], 2), take([1, 2], 5), take([1, 2], 0), take(["a", "b"], 1))
+print(chunk([1, 2, 3, 4, 5], 2))
+print(chunk(["a", "b", "c"], 2))
+print(len(chunk([1], 3)))
+local arr<int> none = []
+print(chunk(none, 2))
+print(unique([1, 2, 1, 3, 2]))
+print(unique(["a", "b", "a"]))
+print(unique([1.5, 1.5, 2.0]))
+print(zip([1, 2, 3], [4, 5]))
+print(zip(["a", "b"], ["x", "y"]))
+print(flatten([[1, 2], [3]]))
+print(flatten([["a"], ["b", "c"]]))
+local arr<arr<int>> nothing = []
+print(flatten(nothing))
+print(enumerate([5, 6]))
+print(enumerate([5, 6], 10))
+print(range(2, 5))
+print(range(5, 2))
+print(range(3, 3))
+assert(1)
+assert(1.5, "fine")
+try
+    assert(0)
+catch e
+    print(e["message"], e["kind"])
+end
+try
+    assert(0, "bad thing")
+catch e
+    print(e["message"], e["kind"])
+end
+try
+    chunk([1], 0)
+catch e
+    print(e["message"], e["kind"])
+end
+a = {"a": 1, "b": 2}
+b = {"b": 20, "c": 30}
+print(map_merge(a, b))
+print(map_pick(a, ["a", "z"]))
+print(map_omit(a, ["a"]))
+words = {"x": ["p"], "y": ["q", "r"]}
+print(map_merge(words, {"z": []}))
+import "str"
+print(num_fixed(3.14159, 2), num_fixed(2, 3), num_fixed(1.5, 0), num_fixed(0.125, 2), num_fixed(-0.0, 1), num_fixed(1e20, 1))
+try
+    num_fixed(1, 101)
+catch e
+    print(e["message"], e["kind"])
+end

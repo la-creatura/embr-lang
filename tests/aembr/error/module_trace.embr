@@ -1,0 +1,3 @@
+import "../ok/mod/util.embr"
+print(outer(1))
+print(outer(4))

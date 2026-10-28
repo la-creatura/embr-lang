@@ -1,0 +1,37 @@
+# a bit of everything: float printing, division, and/or, break/continue, bit ops, a void function
+fn show(x: float)
+    print(x)
+end
+fn collatz(n: int) -> int
+    steps = 0
+    while n != 1
+        if n % 2 == 0
+            n = n >> 1
+        else
+            n = 3 * n + 1
+        end
+        steps = steps + 1
+    end
+    return steps
+end
+show(7 / 2)
+show(1.5 * 4)
+print(10 % 3)
+print((1 < 2) and (3 > 4))
+print((1 < 2) or (3 > 4))
+print(1 << 10 | 5)
+print(-17 >> 2)
+i = 0
+s = 0
+while 1
+    i = i + 1
+    if i > 100
+        break
+    end
+    if i % 2 == 0
+        continue
+    end
+    s = s + i
+end
+print(s)
+print(collatz(27))

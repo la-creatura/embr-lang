@@ -1,0 +1,5 @@
+# refuse: cannot be used as a value
+fn f(&n: int)
+    n = 1
+end
+local g = f

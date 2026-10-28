@@ -1,0 +1,12 @@
+import "embrlib"
+f = fn(n: int) -> int
+    if n > 1
+        error("deep")
+    end
+    return n
+end
+fn call(g: fn(int) -> int, n: int) -> int
+    return g(n)
+end
+print(call(f, 1))
+print(call(f, 2))

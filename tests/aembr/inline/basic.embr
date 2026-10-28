@@ -1,0 +1,54 @@
+# c text goes into the program as it is. $name is an embr variable of the function, $$ is a dollar sign
+fn add3(n: int) -> int
+    r = 0
+    c """
+        $r = $n + 3;
+    """
+    return r
+end
+
+fn scale(x: float) -> float
+    y = 0.0
+    c """
+        $y = $x * 1.5;
+    """
+    return y
+end
+
+fn count_a(s: str) -> int
+    n = 0
+    c """
+        for (int64_t i = 0; i < $s->len; ++i) if ($s->data[i] == 'a') $n += 1;
+    """
+    return n
+end
+
+x = 5
+c """
+    $x = $x * 2;
+"""
+print(x)
+print(add3(4))
+print(scale(2.0))
+print(count_a("banana"))
+
+# a block in a loop
+total = 0
+i = 0
+while i < 4
+    c """
+        $total += $i * 10;
+    """
+    i += 1
+end
+print(total)
+
+# $$ is a dollar sign
+fn dollar() -> int
+    r = 0
+    c """
+        $r = '$$';
+    """
+    return r
+end
+print(dollar())

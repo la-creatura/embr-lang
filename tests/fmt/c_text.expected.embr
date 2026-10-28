@@ -1,0 +1,6 @@
+fn f(n: int) -> int
+    c """
+   raw   text $n   
+"""
+    return n
+end

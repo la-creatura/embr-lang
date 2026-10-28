@@ -1,0 +1,12 @@
+# os_script_dir() is the folder of the running script, taken at the top level
+import "testing.embr"
+import "embrlib"
+import "os"
+import "fs"
+
+here = os_script_dir()
+
+fn test_the_folder_holds_this_file()
+    assert_eq(fs_exists(here + "/test_script_dir.embr"), 1)
+    assert_eq(here[0], "/")
+end

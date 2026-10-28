@@ -11,12 +11,14 @@
  "module:ffi": {
   "functions": {
    "ffi_bind": "fn ffi_bind(lib, header, ...rest)",
+   "ffi_callback_for": "fn ffi_callback_for(name, f)",
    "ffi_cdef": "fn ffi_cdef(lib, decl)",
    "ffi_cdef_at": "fn ffi_cdef_at(address, decl)",
    "ffi_ctype": "fn ffi_ctype(text)",
-   "ffi_typedef": "fn ffi_typedef(name, desc)"
+   "ffi_typedef": "fn ffi_typedef(name, desc)",
+   "ffi_typedef_fn": "fn ffi_typedef_fn(name, ret, params)"
   },
-  "version": "1.0.0"
+  "version": "1.1.0"
  },
  "module:parallel": {
   "functions": {
@@ -88,28 +90,28 @@
  },
  "plugin:embrlib": {
   "functions": {
-   "all_do": "fn all_do(arr: arr, pred: fn|ptr) -> int",
-   "any_do": "fn any_do(arr: arr, pred: fn|ptr) -> int",
+   "all_do": "fn all_do(arr: arr, pred: fn(any) (or a pointer)) -> int",
+   "any_do": "fn any_do(arr: arr, pred: fn(any) (or a pointer)) -> int",
    "append": "fn append(&arr: arr, val) -> int",
    "append_file": "fn append_file(path: str, contents: str) -> float",
    "assert": "fn assert(cond, msg?: str) -> float",
    "call": "fn call(fn: fn|ptr, args?: arr)",
    "chunk": "fn chunk(arr: arr, n: num) -> arr",
    "concat": "fn concat(a: str|arr, b: str|arr, ...more: str|arr) -> str|arr",
-   "count_do": "fn count_do(arr: arr, pred: fn|ptr) -> int",
+   "count_do": "fn count_do(arr: arr, pred: fn(any) (or a pointer)) -> int",
    "do": "fn do(fn: fn|ptr)",
    "drop": "fn drop(arr: arr, n: num) -> arr",
    "enumerate": "fn enumerate(arr: arr, start?: num) -> arr",
    "error": "fn error(msg: str)",
-   "filter": "fn filter(arr: arr, pred: fn|ptr) -> arr",
-   "find_do": "fn find_do(arr: arr, pred: fn|ptr, default?)",
-   "find_index_do": "fn find_index_do(arr: arr, pred: fn|ptr) -> int",
+   "filter": "fn filter(arr: arr, pred: fn(any) (or a pointer)) -> arr",
+   "find_do": "fn find_do(arr: arr, pred: fn(any) (or a pointer), default?)",
+   "find_index_do": "fn find_index_do(arr: arr, pred: fn(any) (or a pointer)) -> int",
    "flatten": "fn flatten(arr: arr, depth?: num) -> arr",
    "fn_arity": "fn fn_arity(fn: fn|ptr) -> int",
    "fn_name": "fn fn_name(fn: fn|ptr) -> str",
    "fn_sig": "fn fn_sig(fn: fn|ptr) -> str",
    "for_each_do": "fn for_each_do(container: str|arr|map, fn: fn|ptr) -> arr|map",
-   "group_by": "fn group_by(arr: arr, keyfn: fn|ptr) -> map",
+   "group_by": "fn group_by(arr: arr, keyfn: fn(any) (or a pointer)) -> map",
    "has": "fn has(container: arr|map|ptr, key)",
    "if_do": "fn if_do(cond, then_fn: fn|ptr, else_fn?: fn|ptr)",
    "index_of": "fn index_of(arr: arr, value) -> int",
@@ -126,23 +128,23 @@
    "map_omit": "fn map_omit(m: map, keys: arr) -> map",
    "map_pick": "fn map_pick(m: map, keys: arr) -> map",
    "max": "fn max(arr: arr)",
-   "max_do": "fn max_do(arr: arr, weight: fn|ptr)",
+   "max_do": "fn max_do(arr: arr, weight: fn(any) -> num (or a pointer))",
    "min": "fn min(arr: arr)",
-   "min_do": "fn min_do(arr: arr, weight: fn|ptr)",
+   "min_do": "fn min_do(arr: arr, weight: fn(any) -> num (or a pointer))",
    "num": "fn num(val: num|str) -> num",
-   "partition": "fn partition(arr: arr, pred: fn|ptr) -> arr",
+   "partition": "fn partition(arr: arr, pred: fn(any) (or a pointer)) -> arr",
    "pop": "fn pop(arr: arr|ptr)",
    "push": "fn push(arr: arr|ptr, val)",
    "range": "fn range(start: num, end: num, step?: num) -> arr<num>",
-   "reduce": "fn reduce(arr: arr, fn: fn|ptr, init)",
+   "reduce": "fn reduce(arr: arr, fn: fn(any, any) (or a pointer), init)",
    "remove_at": "fn remove_at(&arr: arr, pos: num)",
    "remove_key": "fn remove_key(&m: map, key: str) -> int",
    "remove_last": "fn remove_last(&arr: arr)",
    "reverse": "fn reverse(v: str|arr) -> str|arr",
    "slice": "fn slice(container: str|arr|map, start: num, end?: num) -> str|arr|map",
    "sort": "fn sort(arr: arr, descending?) -> arr",
-   "sort_cmp": "fn sort_cmp(arr: arr, cmp: fn|ptr, descending?) -> arr",
-   "sort_do": "fn sort_do(arr: arr, weight: fn|ptr, descending?) -> arr",
+   "sort_cmp": "fn sort_cmp(arr: arr, cmp: fn(any, any) -> num (or a pointer), descending?) -> arr",
+   "sort_do": "fn sort_do(arr: arr, weight: fn(any) -> num (or a pointer), descending?) -> arr",
    "str": "fn str(val)",
    "sum": "fn sum(arr: arr) -> num",
    "take": "fn take(arr: arr, n: num) -> arr",
@@ -153,7 +155,7 @@
    "write_file": "fn write_file(path: str, contents: str) -> float",
    "zip": "fn zip(a: arr, b: arr, ...more: arr) -> arr"
   },
-  "version": "1.0.0"
+  "version": "2.0.0"
  },
  "plugin:embrmath": {
   "functions": {
@@ -340,10 +342,16 @@
    "os_has_env": "fn os_has_env(name: str) -> int",
    "os_pid": "fn os_pid() -> int",
    "os_platform": "fn os_platform() -> str",
+   "os_script_dir": "fn os_script_dir() -> str",
    "os_setenv": "fn os_setenv(name: str, value: str) -> float",
+   "os_stderr_write": "fn os_stderr_write(data: str) -> int",
+   "os_stdin_read": "fn os_stdin_read(n: int) -> str",
+   "os_stdin_read_all": "fn os_stdin_read_all() -> str",
+   "os_stdout_flush": "fn os_stdout_flush() -> int",
+   "os_stdout_write": "fn os_stdout_write(data: str) -> int",
    "os_unsetenv": "fn os_unsetenv(name: str) -> float"
   },
-  "version": "1.0.0"
+  "version": "1.2.0"
  },
  "plugin:package": {
   "functions": {
@@ -374,10 +382,13 @@
    "shared_table_set": "fn shared_table_set(t: ptr, key, value) -> float",
    "shared_table_update": "fn shared_table_update(t: ptr, key, default, fn: fn)",
    "shared_table_values": "fn shared_table_values(t: ptr) -> arr",
+   "worker_alive": "fn worker_alive(w: ptr) -> int",
+   "worker_cancel": "fn worker_cancel(w: ptr) -> float",
    "worker_join": "fn worker_join(w: ptr) -> float",
+   "worker_join_timeout": "fn worker_join_timeout(w: ptr, seconds: num) -> int",
    "worker_spawn": "fn worker_spawn(module_path: str, fn_name: str, in_channel: ptr, out_channel: ptr, extra_args?: arr) -> ptr"
   },
-  "version": "1.0.0"
+  "version": "1.1.0"
  },
  "plugin:path": {
   "functions": {
@@ -426,6 +437,7 @@
   "functions": {
    "num_fixed": "fn num_fixed(x: num, digits: num) -> str",
    "str_chr": "fn str_chr(ord: num) -> str",
+   "str_cmp": "fn str_cmp(a: str, b: str) -> int",
    "str_count": "fn str_count(string: str, substring: str) -> int",
    "str_endswith": "fn str_endswith(string: str, suffix: str) -> int",
    "str_find": "fn str_find(string: str, substring: str, start_pos?: num) -> int",
@@ -447,7 +459,7 @@
    "str_strip": "fn str_strip(string: str) -> str",
    "str_upper": "fn str_upper(string: str) -> str"
   },
-  "version": "1.0.0"
+  "version": "1.1.0"
  },
  "plugin:table": {
   "functions": {

@@ -1,0 +1,29 @@
+# sieve of Eratosthenes over 2M entries: array reads and writes in nested loops
+import "embrlib"
+n = 2000000
+flags = []
+i = 0
+while i <= n
+    flags = push(flags, 1)
+    i = i + 1
+end
+flags[0] = 0
+flags[1] = 0
+p = 2
+while p * p <= n
+    if flags[p] == 1
+        m = p * p
+        while m <= n
+            flags[m] = 0
+            m = m + p
+        end
+    end
+    p = p + 1
+end
+count = 0
+i = 0
+while i <= n
+    count = count + flags[i]
+    i = i + 1
+end
+print(count)

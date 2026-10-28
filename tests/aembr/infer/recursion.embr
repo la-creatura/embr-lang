@@ -1,0 +1,21 @@
+# the first return is the recursive call, a later one tells the type
+fn dive(d)
+    if d > 0
+        return dive(d - 1)
+    end
+    return 7
+end
+print(dive(5))
+fn even(n)
+    if n == 0
+        return 1
+    end
+    return odd(n - 1)
+end
+fn odd(n)
+    if n == 0
+        return 0
+    end
+    return even(n - 1)
+end
+print(even(10))

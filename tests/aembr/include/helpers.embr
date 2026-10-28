@@ -1,0 +1,5 @@
+# included by const_import.embr: a function and a name
+fn triple(n: int) -> int
+    return n * 3
+end
+offset = 7

@@ -1,0 +1,71 @@
+# a parameter that is only read takes no count of its own. every case here must still print what the VM prints
+import "embrlib"
+
+G = [1, 2, 3]
+GS = "global text"
+
+# reads only: borrowed
+fn total(a: arr<int>) -> int
+    t = 0
+    for x in a
+        t += x
+    end
+    return t
+end
+
+# the callee changes the global the caller passed: the argument has to stay alive
+fn swap_global(a: arr<int>) -> int
+    G = [9, 9]
+    return a[0] + len(a)
+end
+
+fn swap_text(s: str) -> str
+    GS = "other"
+    return s + "!"
+end
+
+# a parameter that is written to
+fn grow(a: arr<int>) -> arr<int>
+    a = push(a, 7)
+    return a
+end
+
+# a parameter that is returned and one that is stored
+fn same(a: arr<int>) -> arr<int>
+    return a
+end
+fn keep(a: arr<int>, b: arr<arr<int>>) -> arr<arr<int>>
+    return push(b, a)
+end
+
+# passed on, and recursion
+fn depth(a: arr<int>, n: int) -> int
+    if n == 0
+        return total(a)
+    end
+    return depth(a, n - 1) + 1
+end
+
+# a closure uses a parameter
+fn make(a: arr<int>) -> fn() -> int
+    return fn() -> int
+        return len(a)
+    end
+end
+
+print(total(G))
+print(swap_global(G), G)
+print(swap_text(GS), GS)
+local xs = [1, 2]
+print(grow(xs), xs)
+local ys = same(xs)
+ys = push(ys, 3)
+print(xs, ys)
+local rows = keep(xs, [])
+xs = push(xs, 4)
+print(rows, xs)
+print(depth(xs, 5))
+local f = make(xs)
+xs = [0]
+print(f())
+print(total([4, 5, 6]), total(push([1], 2)))

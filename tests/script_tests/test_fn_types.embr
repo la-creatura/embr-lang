@@ -1,0 +1,45 @@
+# function types, fn(int) -> int, in the places a type can be written
+import "testing.embr"
+import "embrlib"
+
+fn apply(f: fn(int) -> int, x: int) -> int
+    return f(x)
+end
+
+fn make_adder(k: int) -> fn(int) -> int
+    return fn(x: int) -> int
+        return x + k
+    end
+end
+
+fn compose(f: fn(int) -> int, g: fn(int) -> int) -> fn(int) -> int
+    return fn(x: int) -> int
+        return g(f(x))
+    end
+end
+
+fn test_a_function_type_in_a_parameter_and_a_result()
+    assert_eq(apply(make_adder(5), 10), 15)
+    assert_eq(compose(make_adder(1), make_adder(10))(0), 11)
+end
+
+fn test_a_local_and_an_array_element_of_a_function_type()
+    local fn(int, int) -> int add = fn(a: int, b: int) -> int return a + b end
+    assert_eq(add(2, 3), 5)
+    local arr<fn(int) -> int> fs = [make_adder(1), make_adder(2)]
+    assert_eq(fs[1](10), 12)
+end
+
+fn test_the_result_is_optional()
+    seen = []
+    each = fn(f: fn(int), n: int)
+        f(n)
+    end
+    each(fn(x: int) seen = push(seen, x) end, 7)
+    assert_eq(seen[0], 7)
+end
+
+fn test_a_function_of_the_wrong_arity_is_refused_when_it_is_handed_over()
+    two = fn(a, b) return a end
+    assert_raises(fn() apply(two, 1) end)
+end

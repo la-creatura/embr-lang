@@ -1,0 +1,4 @@
+# a module that another module imports: its names are the program's names
+fn triple(x: int) -> int
+    return x * 3
+end

@@ -1,0 +1,6 @@
+# refuse: cannot be used as a value
+fn sq(x)
+    return x * x
+end
+g = sq
+print(sq(2))

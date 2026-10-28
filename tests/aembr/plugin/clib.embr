@@ -1,0 +1,66 @@
+# a plugin written in aembr with C text: C for the whole file (a header, a helper, a table) and C inside functions
+__module__ = {"name": "clib", "version": "1.0.0", "description": "functions written with C text", "capabilities": ["native"]}
+import "embrlib"
+
+c file """
+#include <math.h>
+
+#ifndef CLIB_SCALE
+#define CLIB_SCALE 1
+#endif
+
+static double clib_hyp(double a, double b) { return sqrt(a * a + b * b); }
+static const int64_t clib_primes[] = {2, 3, 5, 7, 11, 13};
+"""
+
+fn hyp(a: float, b: float) -> float
+    r = 0.0
+    c """
+        $r = clib_hyp($a, $b);
+    """
+    return r
+end
+
+fn shout(s: str) -> str
+    r = ""
+    c """
+        EmbrStr* t = rt_str_alloc($s->len);
+        for (int64_t i = 0; i < $s->len; ++i) t->data[i] = (char)(($s->data[i] >= 'a' && $s->data[i] <= 'z') ? $s->data[i] - 32 : $s->data[i]);
+        rt_own_str(&$r, t);
+    """
+    return r
+end
+
+fn prime(i: int) -> int
+    r = 0
+    c """
+        if ($i < 0 || $i >= 6) { rt_raise(cx, "error", 0, "no prime number %lld", (long long)$i); }
+        else $r = clib_primes[$i];
+    """
+    return r
+end
+
+fn scale(n: int) -> int
+    r = 0
+    c """
+        $r = $n * CLIB_SCALE;
+    """
+    return r
+end
+
+# optional parameters: the host may leave them out
+fn tag(n: int, by: int = 10, mark: str = "x") -> str
+    return mark + str(n * by)
+end
+
+# C text that assigns to a parameter: the function has a count of its own for it, the caller's string is not touched
+fn __zz(s: str) -> str
+    c """
+        rt_own_str(&$s, rt_str_from("zz", 2));
+    """
+    return s
+end
+fn rewrite(s: str) -> str
+    t = __zz(s)
+    return s + t
+end

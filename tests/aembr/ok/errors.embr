@@ -1,0 +1,86 @@
+# try / catch: errors from the runtime and from error(), through function calls, with cleanup of what was alive
+import "embrlib"
+try
+    error("boom")
+catch e
+    print(e["message"])
+    print(e["kind"])
+end
+a = [1, 2]
+try
+    print(a[5])
+catch e
+    print(e["message"])
+    print(e["kind"])
+end
+fn thrower(n: int) -> int
+    if n == 0
+        error("deep")
+    end
+    frame = "frame " + str(n)
+    xs = [n, n]
+    return thrower(n - 1) + len(frame) + len(xs)
+end
+try
+    print(thrower(3))
+catch e
+    print(e["message"])
+end
+m = {"a": 1}
+try
+    print(m["zz"])
+catch e
+    print(e["message"])
+end
+try
+    x = 1 / 0
+catch e
+    print(e["message"])
+end
+try
+    y = 5 % 0
+catch e
+    print(e["message"])
+end
+try
+    z = 1 << 70
+catch e
+    print(e["message"])
+end
+fn safe_mod(a: int, b: int) -> int
+    try
+        return a % b
+    catch e
+        return 0 - 1
+    end
+end
+print(safe_mod(7, 2))
+print(safe_mod(7, 0))
+count = 0
+for i in [1...5]
+    try
+        if i % 2 == 0
+            error("even " + str(i))
+        end
+        count = count + 1
+    catch e
+        print(e["message"])
+    end
+end
+print(count)
+try
+    try
+        error("inner")
+    catch e
+        error("rethrown " + e["message"])
+    end
+catch e2
+    print(e2["message"])
+end
+words = ["x", "y"]
+try
+    tmp = "tmp" + str(len(words)) + words[9]
+catch e
+    print(e["message"])
+end
+print(len(words))

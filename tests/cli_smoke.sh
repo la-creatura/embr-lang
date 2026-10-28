@@ -26,6 +26,9 @@ check() {   # name, source, expected substring on stderr+stdout (or "" for "anyt
 
 check "element type on a non-container" 'fn f(a: int<str>) end'  "only arr and map take an element type"
 check "element type left open"  'local arr<int xs = []'        "to close the element type"
+check "function type with a parameter name" 'fn f(g: fn(x: int) -> int) end'  "a function type is written with types only"
+check "function type without parentheses"    'fn f(g: fn int) end'            "expected '(' after 'fn' in a type"
+check "function type with an unclosed list"  'fn f(g: fn(int -> int) end'     "to close the parameter types of a function type"
 check "const assigned again"       'const N = 1
 N = 2' "which is a const"
 check "const that is not constant" 'x = 3
@@ -155,6 +158,10 @@ out="$("$embr" ${flags[@]+"${flags[@]}"} check "$work/te.embr" 2>&1)"; rc=$?
 printf 'import "json"\nx = json_parse(5)\n' > "$work/tn.embr"
 out="$("$embr" ${flags[@]+"${flags[@]}"} check "$work/tn.embr" 2>&1)"; rc=$?
 [[ $rc -eq 1 && "$out" == *"tn.embr:2:16: type: argument 'text' to 'json_parse'"* && "$out" != *"loaded plugin"* ]] || { echo "FAIL [embr check type checks a plugin call]: rc=$rc ${out:0:200}"; fail=1; }
+# a callback of the wrong arity is refused at check time
+printf 'import "embrlib"\nprint(filter([1, 2], fn(a, b) return a end))\n' > "$work/tf.embr"
+out="$("$embr" ${flags[@]+"${flags[@]}"} check "$work/tf.embr" 2>&1)"; rc=$?
+[[ $rc -eq 1 && "$out" == *"argument 'pred' to 'filter': expected fn(any)"* ]] || { echo "FAIL [embr check refuses a callback of the wrong arity]: rc=$rc ${out:0:200}"; fail=1; }
 # the script you run is the whole program, so its own functions get parameter types from their calls
 printf 'fn f(a)\n  a = "s"\nend\nf(1)\n' > "$work/te2.embr"
 "$embr" ${flags[@]+"${flags[@]}"} "$work/te2.embr" >/dev/null 2>&1; [[ $? -eq 1 ]] || { echo "FAIL [parameter type from the call]"; fail=1; }
@@ -269,6 +276,39 @@ out="$("$embr" --backend=nosuch "$work/ast.embr" 2>&1)"; rc=$?
 printf 'print(1)\n' > "$work/ok.embr"
 out="$("$embr" compile "$work/ok.embr" -o "$work/ok.embr/inside-a-file.vmbr" 2>&1)"; rc=$?
 [[ $rc -eq 1 && "$out" == *"cannot write file"* ]] || { echo "FAIL [embr compile to a path it can't write]: rc=$rc ${out:0:200}"; fail=1; }
+
+# const import: a cached compile is not used after an included file changes; a missing or self-including file is a readable error
+mkdir -p "$work/inc/cache"
+printf 'fn inc_val()\n    return 1\nend\n' > "$work/inc/lib.embr"
+printf 'const import "lib.embr"\nprint(inc_val())\n' > "$work/inc/main.embr"
+out="$("$embr" "${flags[@]+"${flags[@]}"}" --cache-dir="$work/inc/cache" "$work/inc/main.embr" 2>/dev/null)"
+[[ "$out" == "1" ]] || { echo "FAIL [const import: first run]: $out"; fail=1; }
+printf 'fn inc_val()\n    return 2\nend\n' > "$work/inc/lib.embr"
+out="$("$embr" "${flags[@]+"${flags[@]}"}" --cache-dir="$work/inc/cache" "$work/inc/main.embr" 2>/dev/null)"
+[[ "$out" == "2" ]] || { echo "FAIL [const import: a changed included file must not be served from the cache]: $out"; fail=1; }
+printf 'const import "nope.embr"\n' > "$work/inc/missing.embr"
+out="$("$embr" "${flags[@]+"${flags[@]}"}" "$work/inc/missing.embr" 2>&1)"
+[[ "$out" == *"const import cannot read the file"* ]] || { echo "FAIL [const import of a missing file]: ${out:0:200}"; fail=1; }
+printf 'const import "loop.embr"\n' > "$work/inc/loop.embr"
+out="$("$embr" "${flags[@]+"${flags[@]}"}" "$work/inc/loop.embr" 2>&1)"
+[[ "$out" == *"includes itself"* ]] || { echo "FAIL [const import of itself]: ${out:0:200}"; fail=1; }
+
+# a plugin the entry script found next to itself is not searched for again by a module in another folder
+mkdir -p "$work/np/lib"
+cp "$(dirname "$embr")/plugins/path$(case "$(uname)" in Darwin) echo .dylib;; MINGW*|MSYS*) echo .dll;; *) echo .so;; esac)" "$work/np/myplug.so" 2>/dev/null || true
+if [[ -f "$work/np/myplug.so" ]]; then
+    printf 'import "embrlib"\nimport "myplug"\nprint(load_module("lib/m.embr")["f"]())\n' > "$work/np/main.embr"
+    printf 'import "myplug"\nfn f()\n    return path_join("a", "b")\nend\n' > "$work/np/lib/m.embr"
+    out="$(cd "$work" && "$embr" "${flags[@]+"${flags[@]}"}" "$work/np/main.embr" 2>/dev/null)"
+    [[ "$out" == "a/b" ]] || { echo "FAIL [a module imports a plugin the entry script already loaded]: ${out:0:200}"; fail=1; }
+fi
+
+# a syntax error stops the script before any of it runs, and every error is shown
+printf 'print("before")\nx = )\nlocal y = )\nprint("after")\n' > "$work/t.embr"
+out="$("$embr" ${flags[@]+"${flags[@]}"} "$work/t.embr" 2>&1)"; rc=$?
+(( rc == 1 )) || { echo "FAIL [syntax error exit code]: exit $rc: ${out:0:200}"; fail=1; }
+[[ "$out" != *before* && "$out" != *after* ]] || { echo "FAIL [syntax error still ran the script]: ${out:0:200}"; fail=1; }
+[[ "$out" == *"line 2"* && "$out" == *"line 3"* ]] || { echo "FAIL [syntax error: both errors shown]: ${out:0:300}"; fail=1; }
 
 (( fail )) && exit 1
 echo "cli smoke OK"

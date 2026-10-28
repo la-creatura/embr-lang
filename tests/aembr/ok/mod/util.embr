@@ -1,0 +1,29 @@
+__module__ = {"name": "util", "version": "1.0.0", "description": "helpers", "capabilities": []}
+import "more.embr"
+import "embrlib"
+
+count = 0
+
+fn twice(x: int) -> int
+    return triple(x) - x
+end
+
+fn counter_next() -> int
+    count = count + 1
+    return count
+end
+
+fn greet(name: str) -> str
+    return "hello " + name
+end
+
+fn boom(n: int) -> int
+    if n > 2
+        error("too big: " + str(n))
+    end
+    return n
+end
+
+fn outer(n: int) -> int
+    return boom(n + 1)
+end

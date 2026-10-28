@@ -1,0 +1,2 @@
+import "withmod"
+print(triple(5), hey("hi"))

@@ -1,0 +1,6 @@
+# refuse: is in-out, write it as &name
+fn f(&n: int)
+    n = n + 1
+end
+local a = 1
+f(a)

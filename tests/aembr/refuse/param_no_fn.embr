@@ -1,0 +1,5 @@
+# refuse: needs a written type
+fn apply(f, x: int) -> int
+    return f(x)
+end
+print(1)

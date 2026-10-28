@@ -1,0 +1,20 @@
+import "embrlib"
+import "regex"
+import "unicode"
+import "os"
+import "random"
+import "time"
+# the C plugins regex, unicode, os, random and time called from a compiled program
+print(re_test("hello world", "wor.d"))
+print(re_match("2024-01-02", "(\\d+)-(\\d+)-(\\d+)"))
+print(re_find_all("a1 b22", "[a-z](\\d+)"))
+print(re_replace("2024-01-02", "-", "/"))
+print(re_match_named("2024-01", "(?<y>\\d+)-(?<m>\\d+)")["m"])
+print(unicode_len("héllo"), unicode_chars("hé"), unicode_chr(233))
+print(os_platform(), os_args())
+r = os_exec(["echo", "hi"])
+print(r["code"], r["stdout"])
+rand_seed(42)
+print(rand_shuffle([1,2,3,4,5]), len(rand_token(4)))
+print(time_format(0, "%Y-%m-%d"), time_parse("2024-01-02", "%Y-%m-%d"))
+print(time_monotonic() > 0)

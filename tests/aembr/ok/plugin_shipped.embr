@@ -1,0 +1,22 @@
+# compiled code calling the C plugins that ship with embr (encoding, path, fs)
+import "embrlib"
+import "encoding"
+import "path"
+import "fs"
+fn show_error(f: fn())
+    try
+        f()
+    catch e
+        print(e["kind"] + ": " + e["message"])
+    end
+end
+
+print(hex_encode("hello"), hex_decode("68656c6c6f"), crc32("hello"))
+print(sha256("abc"))
+print(base64_encode("hello world"), base64_decode("aGVsbG8gd29ybGQ="), base64_encode("??>>", 1), base64_encode("a", 0, 1))
+show_error(fn() hex_decode("zz") end)
+show_error(fn() base64_decode("!!!") end)
+print(path_join("a", "b", "c.txt"), path_basename("/x/y/z.tar.gz"), path_dirname("/x/y/z.tar.gz"), path_extname("/x/y/z.tar.gz"), path_stem("/x/y/z.tar.gz"))
+print(path_is_abs("/x"), path_is_abs("x"), path_normalize("a/./b/../c"), path_relative("/a/b/c", "/a"))
+print(fs_exists("/"), fs_is_dir("/"), fs_exists("/no/such/thing/at/all"), fs_basename("/a/b.txt"), fs_join("a", "b"))
+print(len(fs_list_dir("/")) > 0)

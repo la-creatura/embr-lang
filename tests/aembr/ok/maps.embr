@@ -1,0 +1,47 @@
+# maps: literals, get and set, has, keys and values (sorted), copy on write, maps passed to functions, str and float values
+import "embrlib"
+fn bump(m: map<int>, k: str) -> map<int>
+    m[k] = m[k] + 10
+    return m
+end
+fn count(words: arr<str>) -> map<int>
+    seen = {}
+    for word in words
+        if has(seen, word)
+            seen[word] = seen[word] + 1
+        else
+            seen[word] = 1
+        end
+    end
+    return seen
+end
+m = {"b": 2, "a": 1, "c": 3}
+print(m["a"] + m["b"] + m["c"])
+print(len(m))
+print(has(m, "a"))
+print(has(m, "z"))
+n = bump(m, "a")
+print(m["a"])
+print(n["a"])
+k = m
+k["d"] = 4
+print(len(m))
+print(len(k))
+print(join(keys(m), ","))
+for v in values(m)
+    print(v)
+end
+freq = count(["x", "y", "x", "z", "x", "y"])
+for key in keys(freq)
+    print(key + "=" + str(freq[key]))
+end
+names = {"first": "ada", "last": "lovelace"}
+names["first"] = "grace"
+print(names["first"] + " " + names["last"])
+print(join(values(names), "|"))
+w = {"pi": 3.5, "e": 2.25}
+w["pi"] = w["pi"] * 2
+print(w["pi"] + w["e"])
+empty = {}
+empty["x"] = 1.5
+print(len(empty))

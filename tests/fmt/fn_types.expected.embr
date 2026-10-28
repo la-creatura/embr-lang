@@ -1,0 +1,14 @@
+fn apply(f: fn(int) -> int, x: int) -> int
+    return f(x)
+end
+fn make() -> fn() -> int
+    return fn() -> int
+        return 1
+    end
+end
+local fn(int, int) -> int add = fn(a: int, b: int) -> int return a + b end
+local arr<fn(int) -> int> fs = [fn(x: int) -> int return x end]
+fn run(f: fn(fn(int) -> int) -> int, g: fn(int) -> int) -> int
+    return f(g)
+end
+print(apply(fs[0], 3))

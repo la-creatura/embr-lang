@@ -1,0 +1,3 @@
+# refuse: takes 1
+import "encoding"
+print(hex_encode("a", "b"))

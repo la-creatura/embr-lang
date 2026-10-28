@@ -481,6 +481,11 @@ static void trampolineBody(FFIState::CallbackEntry* entry, void* retbuf, void** 
     size_t rsz = descByteSize(retInfo);
     if (rsz == 0) return;   // void
 
+    if (retInfo.kind == TypeDesc::Kind::Struct) {   // a struct by value: each field goes to its own offset
+        memset(retbuf, 0, rsz);
+        writeValueToMemory("ffi_callback", retbuf, retInfo, result);
+        return;
+    }
     if (retInfo.kind == TypeDesc::Kind::Ptr || retInfo.kind == TypeDesc::Kind::Str) {
         void* p = result.isPointer() ? result.asPointer().ptr : nullptr;
         memcpy(retbuf, &p, sizeof(void*));

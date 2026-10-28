@@ -1,0 +1,7 @@
+# a module a plugin imports: its functions are the plugin's own, not part of its interface
+fn scale(x: int, k: int) -> int
+    return x * k
+end
+fn shout(s: str) -> str
+    return s + "!"
+end

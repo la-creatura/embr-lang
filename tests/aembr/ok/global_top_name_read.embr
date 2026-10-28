@@ -1,0 +1,6 @@
+# a top level name read or changed by a function (or by a lambda in one)
+x = 5
+fn f() -> int
+    return x
+end
+print(f())

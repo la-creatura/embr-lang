@@ -1,0 +1,9 @@
+import "embrlib"
+import "@LIB@"
+print(root_is_dir())
+print(hex_twice("hi"))
+try
+    bad_hex("zz")
+catch e
+    print(e["kind"], e["message"])
+end

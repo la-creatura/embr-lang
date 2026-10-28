@@ -1,0 +1,27 @@
+# compiled code calling a C plugin (examples/hello_c): same answers and same errors as the VM
+import "embrlib"
+import "hello_c"
+fn show_error(f: fn())
+    try
+        f()
+    catch e
+        print(e["kind"] + ": " + e["message"])
+    end
+end
+
+print(hc_twice(21), hc_twice(0 - 4))
+local arr<str> none = []
+local arr<int> nothing = []
+print(hc_join(["a", "b", "c"], "-"), hc_join(["x", "y"]), hc_join(none))
+print(hc_upper("héllo wörld"), hc_upper(""))
+print(hc_sum([1, 2, 3, 4]), hc_sum(nothing))
+sq = hc_squares(6)
+print(len(sq), sq[5], sum(sq))
+print(join(hc_chars("abc"), "|"))
+print(hc_loads())
+show_error(fn() hc_fail("nope") end)
+show_error(fn() hc_fail_kind("mykind", "with a kind") end)
+show_error(fn() hc_squares(0 - 1) end)
+words = ["one", "two"]
+print(hc_join(words, ", "))
+print(len(hc_squares(100000)))

@@ -5,6 +5,9 @@ enable_language(C)
 function(add_c_plugin name source)
     set(target "${name}_plugin")
     add_library(${target} SHARED "${name}/${source}")
+    foreach(extra IN LISTS ARGN)
+        target_sources(${target} PRIVATE "${name}/${extra}")
+    endforeach()
     target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/include)
     set_target_properties(${target} PROPERTIES
         OUTPUT_NAME "${name}"
@@ -44,19 +47,19 @@ endfunction()
 
 add_plugin(embrlib embrlib.cpp)
 add_plugin(str str.cpp)
-add_plugin(unicode unicode.cpp)
+add_c_plugin(unicode unicode.c)           # written in C against include/embr_plugin.h
 add_c_plugin(json json.c)             # written in C against include/embr_plugin.h
 add_plugin(embrtypes embrtypes.cpp)
 add_plugin(ffi ffi.cpp)
 add_plugin(embrmath embrmath.cpp)
 add_c_plugin(fs fs.c)                   # written in C against include/embr_plugin.h
 add_c_plugin(path path.c)               # written in C against include/embr_plugin.h
-add_plugin(os os.cpp)
-add_plugin(random random.cpp)
+add_c_plugin(os os.c)                   # written in C against include/embr_plugin.h
+add_c_plugin(random random.c)               # written in C against include/embr_plugin.h
 add_c_plugin(encoding encoding.c)       # written in C against include/embr_plugin.h, see the wiki, writing-plugins
 add_c_plugin(csv csv.c)               # written in C against include/embr_plugin.h
-add_plugin(time time.cpp)
-add_plugin(regex regex.cpp)
+add_c_plugin(time time.c)                 # written in C against include/embr_plugin.h
+add_c_plugin(regex regex.c rx.c)        # written in C against include/embr_plugin.h, the engine is rx.c
 add_plugin(embrmeta embrmeta.cpp)
 add_plugin(package package.cpp)
 add_plugin(pmbr pmbr.cpp)

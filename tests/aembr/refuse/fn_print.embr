@@ -1,0 +1,3 @@
+# refuse: printing a function is not compiled
+f = fn() -> int return 1 end
+print(f)

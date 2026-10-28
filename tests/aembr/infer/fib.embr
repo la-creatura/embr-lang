@@ -1,0 +1,8 @@
+# a recursive function with nothing written: the types come from the call
+fn fib(n)
+    if n < 2
+        return n
+    end
+    return fib(n - 1) + fib(n - 2)
+end
+print(fib(20))

@@ -1,0 +1,3 @@
+# refuse: holds
+x = 1
+x = x + 0.5

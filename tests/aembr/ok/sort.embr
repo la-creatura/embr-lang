@@ -1,0 +1,33 @@
+# a bubble sort over an array passed to and returned from functions, and a sum of floats
+import "embrlib"
+fn sorted(xs: arr<int>) -> arr<int>
+    n = len(xs)
+    i = 0
+    while i < n
+        j = 0
+        while j < n - 1 - i
+            if xs[j] > xs[j + 1]
+                t = xs[j]
+                xs[j] = xs[j + 1]
+                xs[j + 1] = t
+            end
+            j = j + 1
+        end
+        i = i + 1
+    end
+    return xs
+end
+fn total(xs: arr<float>) -> float
+    s = 0.0
+    for x in xs
+        s = s + x
+    end
+    return s
+end
+data = [5, 2, 9, 1, 7, 3]
+out = sorted(data)
+for v in out
+    print(v)
+end
+print(data[0])
+print(total([0.5, 0.25, 0.125]))

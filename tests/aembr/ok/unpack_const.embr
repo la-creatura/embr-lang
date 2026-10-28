@@ -1,0 +1,35 @@
+import "embrlib"
+# const names, and unpacking an array into names
+const LIMIT = 3
+const GREETING = "hi"
+fn pair() -> arr<int>
+    return [7, 8, 9]
+end
+fn use_limit(n: int) -> int
+    return n * LIMIT
+end
+a, b = [1, 2]
+print(a, b)
+local c, d = [3, 4]
+print(c, d)
+local [e, f] = [5, 6]
+print(e, f)
+g, h = pair()
+print(g, h)
+print(use_limit(4), GREETING)
+words = ["x", "y", "z"]
+first, second = words
+print(first + second)
+local arr<int> nums = [10, 20]
+local int p, int q = nums
+print(p + q)
+try
+    i, j = [1]
+catch err
+    print(err["message"])
+end
+try
+    i, j, k = [1, 2]
+catch err
+    print(err["message"])
+end

@@ -1,0 +1,57 @@
+import "embrlib"
+import "json"
+# changing values deep inside anys, handles (null, true, false) from json, and anys in loops
+doc = json_parse("{\"name\": \"x\", \"list\": [1, 2, [3, 4]], \"cfg\": {\"on\": true, \"off\": false, \"none\": null, \"n\": 5}}")
+print(doc)
+doc["list"][1] = "two"
+doc["list"][2][0] = 30
+doc["cfg"]["n"] = doc["cfg"]["n"] + 1
+doc["cfg"]["added"] = [1, 2]
+doc["cfg"]["added"][1] = 20
+append(&doc["list"], "end")
+print(doc)
+copy = doc
+doc["list"][0] = -1
+print(copy["list"][0], doc["list"][0])
+print(type(doc["cfg"]["on"]), doc["cfg"]["on"], doc["cfg"]["none"])
+if doc["cfg"]["on"]
+    print("on is true")
+end
+if doc["cfg"]["off"]
+    print("off is true")
+else
+    print("off is false")
+end
+if doc["cfg"]["none"]
+    print("none is true")
+else
+    print("none is false")
+end
+print(doc["cfg"]["on"] == doc["cfg"]["on"], doc["cfg"]["on"] == doc["cfg"]["off"], doc["cfg"]["none"] == doc["cfg"]["off"])
+print(json_stringify(doc))
+
+# anys in loops and in typed containers
+grid = json_parse("[[1, 2], [3, 4], [5, 6]]")
+sum = 0
+for row in grid
+    for x in row
+        sum += x
+    end
+end
+print(sum)
+i = 0
+while i < len(grid)
+    grid[i][0] = grid[i][0] * 10
+    i += 1
+end
+print(grid)
+names = ["a", "b"]
+box = {"names": names, "count": len(names)}
+names[0] = "changed"
+print(box, names)
+local arr<arr<int>> typed = [[1], [2, 3]]
+holder = {"typed": typed, "mixed": [1, "x"]}
+holder["typed"][1][0] = 99
+print(holder, typed)
+back = holder["typed"]
+print(back)

@@ -1,0 +1,7 @@
+# refuse: has to be a variable
+import "embrlib"
+fn f(&n: int)
+    n = n + 1
+end
+local a = [1]
+f(&a[0])

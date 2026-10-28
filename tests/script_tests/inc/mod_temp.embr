@@ -1,0 +1,12 @@
+# a module: its functions use temporaries, and keep a counter of their own
+counter = 0
+
+fn use_temp()
+    q = 5
+    return q + 1
+end
+
+fn bump()
+    counter = counter + 1
+    return counter
+end

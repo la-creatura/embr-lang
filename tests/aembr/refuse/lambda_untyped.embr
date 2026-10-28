@@ -1,0 +1,3 @@
+# refuse: needs a written type
+f = fn(x) -> int return 1 end
+print(1)

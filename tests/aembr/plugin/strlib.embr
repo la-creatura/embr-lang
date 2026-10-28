@@ -1,0 +1,135 @@
+__module__ = {
+    "version": "0.1.0",
+    "description": "strings, arrays and maps across the plugin boundary",
+    "capabilities": [],
+}
+
+import "embrlib"
+
+GREETING = "hello"
+PRIMES = [2, 3, 5, 7, 11]
+WEIGHTS = {"a": 1, "b": 2}
+
+# the greeting, a constant made when the plugin is imported
+fn greeting() -> str
+    return GREETING
+end
+
+fn nth_prime(i: int) -> int
+    return PRIMES[i]
+end
+
+fn weight(k: str) -> int
+    return WEIGHTS[k]
+end
+
+# s with an exclamation mark
+fn shout(s: str) -> str
+    return s + "!"
+end
+
+fn repeat(s: str, n: int) -> str
+    out = ""
+    i = 0
+    while i < n
+        out = out + s
+        i = i + 1
+    end
+    return out
+end
+
+fn total(xs: arr<int>) -> int
+    t = 0
+    for x in xs
+        t = t + x
+    end
+    return t
+end
+
+fn halves(xs: arr<float>) -> arr<float>
+    out = []
+    for x in xs
+        out = push(out, x / 2)
+    end
+    return out
+end
+
+fn evens(xs: arr<int>) -> arr<int>
+    out = []
+    for x in xs
+        if x % 2 == 0
+            out = push(out, x)
+        end
+    end
+    return out
+end
+
+fn lengths(xs: arr<str>) -> arr<int>
+    out = []
+    for s in xs
+        out = push(out, len(s))
+    end
+    return out
+end
+
+fn tags(xs: arr<str>) -> arr<str>
+    out = []
+    for s in xs
+        out = push(out, "<" + s + ">")
+    end
+    return out
+end
+
+fn count_words(xs: arr<str>) -> map<int>
+    seen = {}
+    for w in xs
+        if has(seen, w)
+            seen[w] = seen[w] + 1
+        else
+            seen[w] = 1
+        end
+    end
+    return seen
+end
+
+fn lookup(m: map<int>, k: str) -> int
+    return m[k]
+end
+
+fn shout_all(m: map<str>) -> map<str>
+    out = {}
+    for k in keys(m)
+        out[k] = m[k] + "!"
+    end
+    return out
+end
+
+fn scale(m: map<float>, f: float) -> map<float>
+    out = {}
+    for k in keys(m)
+        out[k] = m[k] * f
+    end
+    return out
+end
+
+fn first(xs: arr<int>) -> int
+    return xs[0]
+end
+
+# an error of your own, with the kind "error"
+fn must_be_positive(n: int) -> int
+    if n < 1
+        error("not positive: " + str(n))
+    end
+    return n
+end
+
+fn count_to(n: int) -> arr<int>
+    out = []
+    i = 0
+    while i < n
+        out = push(out, i)
+        i = i + 1
+    end
+    return out
+end

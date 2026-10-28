@@ -1,0 +1,8 @@
+__module__ = {"name": "withmod", "version": "1.0.0", "description": "a plugin made of two files", "capabilities": []}
+import "lib/helpers.embr"
+fn triple(x: int) -> int
+    return scale(x, 3)
+end
+fn hey(s: str) -> str
+    return shout(s)
+end

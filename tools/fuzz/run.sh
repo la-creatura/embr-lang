@@ -45,8 +45,13 @@ fi
 for t in "${targets[@]}"; do
     [[ " ${plugin_targets[*]} " == *" $t "* ]] || continue
     if [[ -f "$root/plugins/$t/$t.c" ]]; then   # a plugin written in C: compiled on its own (with the sanitizers), then linked in
-        gcc -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -I "$root/include" -c "$root/plugins/$t/$t.c" -o "embr_fuzz_$t.o" || exit 2
-        "${cxx[@]}" -DFUZZ_C_PLUGIN -DFUZZ_PLUGIN_SRC="\"$root/include/embr_plugin.h\"" -DFUZZ_PLUGIN_NAME="\"$t\"" "$here/fuzz.cpp" "embr_fuzz_$t.o" -o "embr_fuzz_$t" -ldl || exit 2
+        objs=()   # every .c file of the plugin's folder (regex has an engine file next to the plugin)
+        for f in "$root/plugins/$t"/*.c; do
+            o="embr_fuzz_$t.$(basename "$f" .c).o"
+            gcc -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -I "$root/include" -c "$f" -o "$o" || exit 2
+            objs+=("$o")
+        done
+        "${cxx[@]}" -DFUZZ_C_PLUGIN -DFUZZ_PLUGIN_SRC="\"$root/include/embr_plugin.h\"" -DFUZZ_PLUGIN_NAME="\"$t\"" "$here/fuzz.cpp" "${objs[@]}" -o "embr_fuzz_$t" -ldl || exit 2
     else
         "${cxx[@]}" -DFUZZ_PLUGIN_SRC="\"$root/plugins/$t/$t.cpp\"" -DFUZZ_PLUGIN_NAME="\"$t\"" "$here/fuzz.cpp" -o "embr_fuzz_$t" -ldl || exit 2
     fi

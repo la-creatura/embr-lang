@@ -1,0 +1,5 @@
+# refuse: a program has no host
+fn f(v: host) -> int
+    return 1
+end
+print(1)

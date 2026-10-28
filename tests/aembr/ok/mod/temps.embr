@@ -1,0 +1,5 @@
+# library code that uses a temporary called q: it is a local, whatever the program that imports it has
+fn use_temp() -> int
+    q = 5
+    return q + 1
+end

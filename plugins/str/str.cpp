@@ -83,6 +83,11 @@ std::string str_upper(const std::string& in) {
     return s;
 }
 
+int64_t str_cmp(const std::string& a, const std::string& b) {
+    int c = a.compare(b);   // byte by byte, as unsigned chars
+    return c < 0 ? -1 : c > 0 ? 1 : 0;
+}
+
 Value str_find(const ArgSpan& args) {
     size_t startPos = 0;
     if (args.size() >= 3) {
@@ -351,6 +356,7 @@ EMBR_PLUGIN {
     interp->bindTyped("str_strip",      {"string"}, str_strip);
     interp->bindTyped("str_lower",      {"string"}, str_lower);
     interp->bindTyped("str_upper",      {"string"}, str_upper);
+    interp->bindTyped("str_cmp",        {"a", "b"}, str_cmp);
     interp->bindSpan("str_find",       {pStr("string"), pStr("substring"), pOpt("start_pos", TS::Num)}, str_find);
     interp->bindTyped("str_startswith", {"string", "prefix"}, str_startswith);
     interp->bindTyped("str_endswith",   {"string", "suffix"}, str_endswith);
@@ -372,7 +378,7 @@ EMBR_PLUGIN {
     // what each always returns (see Value::Callable::returns). the yes/no ones give the int 1 or 0, like a comparison
     interp->setResultTypes({
         {"str_split", TS::Arr}, {"str_replace", TS::Str}, {"str_strip", TS::Str}, {"str_lower", TS::Str}, {"str_upper", TS::Str},
-        {"str_find", TS::Int}, {"str_startswith", TS::Int}, {"str_endswith", TS::Int},
+        {"str_find", TS::Int}, {"str_cmp", TS::Int}, {"str_startswith", TS::Int}, {"str_endswith", TS::Int},
         {"str_isdigit", TS::Int}, {"str_isalpha", TS::Int}, {"str_isalnum", TS::Int},
         {"str_count", TS::Int}, {"str_ord", TS::Int}, {"str_chr", TS::Str}, {"str_repeat", TS::Str}, {"str_reverse", TS::Str},
         {"str_pad_left", TS::Str}, {"str_pad_right", TS::Str}, {"str_format", TS::Str}, {"num_fixed", TS::Str},
@@ -381,7 +387,7 @@ EMBR_PLUGIN {
 
     // the same answer for the same arguments and no side effects, so a const may call them while compiling
     interp->setPure({
-        "str_split", "str_replace", "str_strip", "str_lower", "str_upper", "str_find", "str_startswith",
+        "str_split", "str_replace", "str_strip", "str_lower", "str_upper", "str_find", "str_cmp", "str_startswith",
         "str_endswith", "str_isdigit", "str_isalpha", "str_isalnum", "str_count", "str_ord", "str_chr",
         "str_repeat", "str_reverse", "str_pad_left", "str_pad_right", "str_format", "num_fixed",
         "str_ltrim", "str_rtrim",
@@ -390,9 +396,10 @@ EMBR_PLUGIN {
 }
 
 // what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
-EMBR_PLUGIN_INFO("str", "1.0.0", "split, replace, strip, case, find, pad and format for byte strings", EMBR_CAP_NONE, EMBR_CAP_NONE,
+EMBR_PLUGIN_INFO("str", "1.1.0", "split, replace, strip, case, find, pad and format for byte strings", EMBR_CAP_NONE, EMBR_CAP_NONE,
     {"num_fixed", "x written with exactly `digits` decimals (0 to 100), like printf's %.Nf"},
     {"str_chr", "raises outside 0–255"},
+    {"str_cmp", "-1, 0 or 1: a sorts before, equal to or after b, comparing bytes (a prefix sorts first). usable as the comparator of sort_cmp"},
     {"str_count", "non-overlapping; 0 if substring empty"},
     {"str_endswith", "1 if the string ends with suffix, else 0"},
     {"str_find", "-1 if not found"},

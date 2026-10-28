@@ -86,7 +86,7 @@ int main() {
           "p = meta_plugin(\"embrlib\")\nprint(p[\"name\"])\nprint(p[\"version\"])\nprint(p[\"kind\"])\nprint(p[\"abi\"])\n"
           "print(p[\"capabilities\"])\nprint(p[\"optional_capabilities\"])\nprint(p[\"declared\"])\n"
           "print(len(p[\"description\"]) > 10)\nprint(len(p[\"build_id\"]) > 10)\n",
-          "embrlib\n1.0.0\ncxx\n1\n[]\n[\"filesystem\"]\n1\n1\n1\n" },
+          "embrlib\n2.0.0\ncxx\n1\n[]\n[\"filesystem\"]\n1\n1\n1\n" },
 
         { "meta_plugin: functions have a signature read from the bound function and a doc line",
           "fns = meta_plugin(\"embrmeta\")[\"functions\"]\nby = {}\nfor f in fns\n  by[f[\"name\"]] = f\nend\n"

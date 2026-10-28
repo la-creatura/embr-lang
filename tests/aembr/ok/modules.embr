@@ -1,0 +1,12 @@
+# import "file.embr": the module runs where the import is, once, and its names are the program's names
+import "embrlib"
+import "mod/util.embr"
+import "mod/util.embr"
+print(twice(21), counter_next(), counter_next(), triple(2))
+print(greet("modules"))
+try
+    boom(5)
+catch e
+    print(e["message"], e["line"])
+end
+print(boom(1))

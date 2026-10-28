@@ -7,8 +7,7 @@
 #   OUT=dir JOBS=8 tools/coverage/run.sh
 #
 # good to know
-#   - it builds a COPY of the tree (working-tree changes included), because a build in the repo writes bin/linux/,
-#     which every preset shares (see AGENTS.md). so it never disturbs your linux-debug binaries
+#   - it builds a COPY of the tree (working-tree changes included), because a build in the repo writes bin/linux/, which every preset shares
 #   - plugins stay loaded until exit (EMBR_NO_DLCLOSE=1), so their counts are written like everything else's
 #   - exit status: the tests' status. the report is written either way
 set -uo pipefail

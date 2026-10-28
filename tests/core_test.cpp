@@ -1488,6 +1488,30 @@ int main() {
           "sort_cmp([2, 1], fn(a, b) ty_cb(a)\n return a - b end)\n"
           "try\n  print(ty_leaked)\ncatch ty_e\n  print(\"not a global\")\nend\n",
           "not a global\n" },
+
+        { "function types: fn(int) -> int in a parameter, a result, a local and an array element",
+          "fn ft_apply(f: fn(int) -> int, x: int) -> int\n  return f(x)\nend\n"
+          "fn ft_counter() -> fn() -> int\n  n = 0\n  return fn() -> int\n    n = n + 1\n    return n\n  end\nend\n"
+          "fn ft_twice(f: fn(int) -> int) -> fn(int) -> int\n  return fn(x: int) -> int\n    return f(f(x))\n  end\nend\n"
+          "fn ft_sq(x: int) -> int\n  return x * x\nend\n"
+          "local fn(int, int) -> int ft_add = fn(a: int, b: int) -> int return a + b end\n"
+          "local arr<fn(int) -> int> ft_fs = [ft_sq, fn(x: int) -> int return x + 1 end]\n"
+          "ft_c = ft_counter()\nft_c()\n"
+          "print(ft_apply(ft_sq, 7), ft_c(), ft_add(2, 3), ft_twice(ft_sq)(3), ft_fs[1](10))\n",
+          "49 2 5 81 11\n" },
+
+        { "function types: the result is optional, an unannotated lambda fits, and a result that is not written is not checked",
+          "fn ft_run(f: fn(int)) -> int\n  return f(1)\nend\n"
+          "print(ft_run(fn(x: int) -> int return x + 10 end), ft_run(fn(x) return x + 20 end))\n"
+          "local fn(int) -> int ft_g = fn(a) return a * 2 end\nprint(ft_g(4))\n",
+          "11 21\n8\n" },
+
+        { "function types: a function handed to a parameter has to take the number of arguments the type says",
+          "fn ft_apply2(f: fn(int) -> int, x: int) -> int\n  return f(x)\nend\n"
+          "ft_two = fn(a, b) return a end\n"
+          "try\n  ft_apply2(ft_two, 1)\ncatch e\n  print(e.message)\nend\n"
+          "print(ft_apply2(fn(a) return a + 1 end, 1), ft_apply2(fn(...r) return 3 end, 1))\n",
+          "argument 'f' to 'ft_apply2': expected a function that takes 1 argument, but got one that takes 2 arguments\n2 3\n" },
     };
     return embr_test::runSuite("embr core test suite", tests, {"embrlib"});
 }

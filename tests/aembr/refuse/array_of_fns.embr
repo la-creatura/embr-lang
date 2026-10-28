@@ -1,0 +1,3 @@
+# refuse: holds functions
+local arr<fn(int) -> int> fs = []
+print(1)

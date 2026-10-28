@@ -28,3 +28,7 @@
 (try_statement error: (identifier) @variable)
 
 (identifier) @variable
+
+; C text for aembr, and `const import`
+(c_text_statement) @string
+(const_import_keyword) @keyword

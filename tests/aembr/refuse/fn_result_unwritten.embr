@@ -1,0 +1,5 @@
+# refuse: has no return type, so it cannot return a value
+fn make()
+    return fn(x: int) -> int return x end
+end
+print(1)

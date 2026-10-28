@@ -1,0 +1,56 @@
+import "embrlib"
+import "time"
+import "str"
+import "@LIB@"
+# usage: embr bench_json.embr. best-of-3 milliseconds. the document is 20000 small records (about 1.5 MB)
+fn best(f: fn(), reps: int) -> float
+    b = 1000000.0
+    r = 0
+    while r < reps
+        t0 = time_monotonic()
+        f()
+        t = (time_monotonic() - t0) * 1000.0
+        if t < b
+            b = t
+        end
+        r += 1
+    end
+    return b
+end
+fn row(label, ms)
+    print(str_pad_right(label, 28), num_fixed(ms, 2), "ms")
+end
+fn make_text() -> str
+    out = "["
+    i = 0
+    while i < 20000
+        if i > 0
+            out = out + ","
+        end
+        out = out + "{\"id\":" + str(i) + ",\"name\":\"item " + str(i) + "\",\"price\":" + str(i * 0.25) + ",\"tags\":[\"a\",\"b\",\"c\"],\"ok\":true,\"note\":null,\"nested\":{\"x\":" + str(i % 7) + ",\"y\":[1,2,3]}}"
+        i += 1
+    end
+    return out + "]"
+end
+text = make_text()
+doc = json_parse(text)
+small = "{\"id\": 7, \"name\": \"x\", \"tags\": [1, 2, 3], \"ok\": true}"
+sdoc = json_parse(small)
+row("parse 1.5 MB", best(fn() json_parse(text) end, 3))
+row("stringify 1.5 MB", best(fn() json_stringify(doc, 0) end, 3))
+row("stringify indent 2", best(fn() json_stringify(doc, 2) end, 3))
+row("valid 1.5 MB", best(fn() json_valid(text) end, 3))
+row("50k x parse small", best(fn()
+    i = 0
+    while i < 50000
+        json_parse(small)
+        i += 1
+    end
+end, 3))
+row("50k x stringify small", best(fn()
+    i = 0
+    while i < 50000
+        json_stringify(sdoc, 0)
+        i += 1
+    end
+end, 3))

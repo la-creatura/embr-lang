@@ -1,0 +1,229 @@
+# aencoding: the encoding plugin (base64, hex, sha256, crc32) written in aembr. every function is one C block over the bytes of the string (a loop over a
+# buffer, no array of numbers in between); the aembr part checks the arguments and raises the errors. import "aencoding" gives the same functions as
+# import "encoding".
+#
+# good to know
+#   - urlsafe and nopad are ints (0 or 1), not any value that can be true
+import "embrlib"
+
+__module__ = {
+    "version": "1.0.0",
+    "description": "base64, hex, sha256 and crc32 for byte strings, written in aembr",
+    "capabilities": ["native"],
+}
+
+c file """
+static const char ae_hexd[] = "0123456789abcdef";
+static const char ae_b64[]    = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char ae_b64url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+static int ae_nibble(int ch) {
+    if (ch >= 48 && ch <= 57) return ch - 48;
+    if (ch >= 97 && ch <= 102) return ch - 87;
+    if (ch >= 65 && ch <= 70) return ch - 55;
+    return -1;
+}
+static int ae_b64val(int ch, int url) {
+    if (ch >= 65 && ch <= 90) return ch - 65;
+    if (ch >= 97 && ch <= 122) return ch - 71;
+    if (ch >= 48 && ch <= 57) return ch + 4;
+    if (ch == 45 && url) return 62;
+    if (ch == 43 && !url) return 62;
+    if (ch == 95 && url) return 63;
+    if (ch == 47 && !url) return 63;
+    return -1;
+}
+
+static uint32_t ae_crc_table[256];
+static void ae_crc_init(void) {
+    for (uint32_t k = 0; k < 256; ++k) {
+        uint32_t c = k;
+        for (int j = 0; j < 8; ++j) c = (c & 1) ? 3988292384u ^ (c >> 1) : c >> 1;
+        ae_crc_table[k] = c;
+    }
+}
+
+static const uint32_t ae_k[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2 };
+#define AE_ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
+
+static void ae_sha_block(uint32_t h[8], const unsigned char* p) {
+    uint32_t w[64];
+    for (int t = 0; t < 16; ++t) w[t] = ((uint32_t)p[t * 4] << 24) | ((uint32_t)p[t * 4 + 1] << 16) | ((uint32_t)p[t * 4 + 2] << 8) | p[t * 4 + 3];
+    for (int t = 16; t < 64; ++t) {
+        uint32_t s0 = AE_ROR(w[t - 15], 7) ^ AE_ROR(w[t - 15], 18) ^ (w[t - 15] >> 3);
+        uint32_t s1 = AE_ROR(w[t - 2], 17) ^ AE_ROR(w[t - 2], 19) ^ (w[t - 2] >> 10);
+        w[t] = w[t - 16] + s0 + w[t - 7] + s1;
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], hh = h[7];
+    for (int t = 0; t < 64; ++t) {
+        uint32_t t1 = hh + (AE_ROR(e, 6) ^ AE_ROR(e, 11) ^ AE_ROR(e, 25)) + ((e & f) ^ (~e & g)) + ae_k[t] + w[t];
+        uint32_t t2 = (AE_ROR(a, 2) ^ AE_ROR(a, 13) ^ AE_ROR(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+        hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+}
+/* the digest of n bytes, 32 bytes */
+static void ae_sha256(const unsigned char* m, size_t n, unsigned char out[32]) {
+    uint32_t h[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+    size_t full = n / 64;
+    for (size_t i = 0; i < full; ++i) ae_sha_block(h, m + i * 64);
+    unsigned char tail[128];
+    size_t rest = n - full * 64;
+    memcpy(tail, m + full * 64, rest);
+    tail[rest] = 0x80;
+    size_t tl = rest + 1 + 8 <= 64 ? 64 : 128;
+    memset(tail + rest + 1, 0, tl - rest - 1);
+    uint64_t bits = (uint64_t)n * 8;
+    for (int i = 0; i < 8; ++i) tail[tl - 1 - i] = (unsigned char)(bits >> (8 * i));
+    for (size_t i = 0; i < tl; i += 64) ae_sha_block(h, tail + i);
+    for (int i = 0; i < 8; ++i) { out[i * 4] = (unsigned char)(h[i] >> 24); out[i * 4 + 1] = (unsigned char)(h[i] >> 16); out[i * 4 + 2] = (unsigned char)(h[i] >> 8); out[i * 4 + 3] = (unsigned char)h[i]; }
+}
+"""
+
+fn fail(kind: str, message: str)
+    c """
+        rt_raise_dyn_kind(cx, $kind->data, 0, $message->data);
+    """
+end
+
+# ---- hex
+fn hex_encode(data: str) -> str
+    out = ""
+    c """
+        EmbrStr* t = rt_str_alloc($data->len * 2);
+        for (int64_t i = 0; i < $data->len; ++i) {
+            unsigned char b = (unsigned char)$data->data[i];
+            t->data[i * 2] = ae_hexd[b >> 4];
+            t->data[i * 2 + 1] = ae_hexd[b & 15];
+        }
+        rt_own_str(&$out, t);
+    """
+    return out
+end
+
+fn hex_decode(text: str) -> str
+    if len(text) % 2 != 0
+        fail("hex_decode", "odd number of hex digits")
+    end
+    out = ""
+    bad = -1
+    c """
+        EmbrStr* t = rt_str_alloc($text->len / 2);
+        for (int64_t i = 0; i < $text->len; i += 2) {
+            int hi = ae_nibble((unsigned char)$text->data[i]), lo = ae_nibble((unsigned char)$text->data[i + 1]);
+            if (hi < 0) { $bad = i; break; }
+            if (lo < 0) { $bad = i + 1; break; }
+            t->data[i / 2] = (char)(hi * 16 + lo);
+        }
+        if ($bad >= 0) rt_release_str(t); else rt_own_str(&$out, t);
+    """
+    if bad >= 0
+        fail("hex_decode", "invalid hex digit at position " + str(bad))
+    end
+    return out
+end
+
+# ---- base64
+fn base64_encode(data: str, urlsafe: int = 0, nopad: int = 0) -> str
+    out = ""
+    c """
+        const char* tbl = $urlsafe ? ae_b64url : ae_b64;
+        int64_t n = $data->len, full = n / 3, rest = n - full * 3;
+        int64_t outn = full * 4 + (rest ? ($nopad ? rest + 1 : 4) : 0);
+        EmbrStr* t = rt_str_alloc(outn);
+        const unsigned char* s = (const unsigned char*)$data->data;
+        char* o = t->data;
+        for (int64_t i = 0; i < full; ++i, s += 3, o += 4) {
+            uint32_t v = ((uint32_t)s[0] << 16) | ((uint32_t)s[1] << 8) | s[2];
+            o[0] = tbl[v >> 18]; o[1] = tbl[(v >> 12) & 63]; o[2] = tbl[(v >> 6) & 63]; o[3] = tbl[v & 63];
+        }
+        if (rest == 1) {
+            uint32_t v = (uint32_t)s[0] << 16;
+            o[0] = tbl[v >> 18]; o[1] = tbl[(v >> 12) & 63];
+            if (!$nopad) { o[2] = '='; o[3] = '='; }
+        } else if (rest == 2) {
+            uint32_t v = ((uint32_t)s[0] << 16) | ((uint32_t)s[1] << 8);
+            o[0] = tbl[v >> 18]; o[1] = tbl[(v >> 12) & 63]; o[2] = tbl[(v >> 6) & 63];
+            if (!$nopad) o[3] = '=';
+        }
+        rt_own_str(&$out, t);
+    """
+    return out
+end
+
+fn base64_decode(text: str, urlsafe: int = 0) -> str
+    n = len(text)
+    padding = 0
+    c """
+        int64_t m = $n;
+        while (m > 0 && $text->data[m - 1] == '=') { m--; $padding++; }
+        $n = m;
+    """
+    if padding > 2
+        fail("base64_decode", "too much '=' padding")
+    end
+    if padding > 0 and (n + padding) % 4 != 0
+        fail("base64_decode", "incorrect padding")
+    end
+    if n % 4 == 1
+        fail("base64_decode", "invalid length")
+    end
+    out = ""
+    bad = -1
+    trailing = 0
+    c """
+        EmbrStr* t = rt_str_alloc($n * 3 / 4);
+        int64_t o = 0;
+        uint32_t acc = 0;
+        int bits = 0;
+        for (int64_t i = 0; i < $n; ++i) {
+            int v = ae_b64val((unsigned char)$text->data[i], (int)$urlsafe);
+            if (v < 0) { $bad = i; break; }
+            acc = (acc << 6) | (uint32_t)v;
+            bits += 6;
+            if (bits >= 8) { bits -= 8; t->data[o++] = (char)((acc >> bits) & 255); }
+        }
+        if ($bad < 0 && bits > 0 && (acc & ((1u << bits) - 1)) != 0) $trailing = 1;
+        if ($bad >= 0 || $trailing) rt_release_str(t); else rt_own_str(&$out, t);
+    """
+    if bad >= 0
+        fail("base64_decode", "invalid character at position " + str(bad))
+    end
+    if trailing
+        fail("base64_decode", "non-canonical trailing bits")
+    end
+    return out
+end
+
+# ---- crc32. the table is made once, when the plugin is loaded
+fn crc32(data: str) -> int
+    r = 0
+    c """
+        if (!ae_crc_table[1]) ae_crc_init();
+        uint32_t c = 0xffffffffu;
+        for (int64_t i = 0; i < $data->len; ++i) c = ae_crc_table[(c ^ (unsigned char)$data->data[i]) & 255] ^ (c >> 8);
+        $r = (int64_t)(c ^ 0xffffffffu);
+    """
+    return r
+end
+
+# ---- sha256 (FIPS 180-4)
+fn sha256_raw(data: str) -> str
+    out = ""
+    c """
+        unsigned char d[32];
+        ae_sha256((const unsigned char*)$data->data, (size_t)$data->len, d);
+        EmbrStr* t = rt_str_alloc(32);
+        memcpy(t->data, d, 32);
+        rt_own_str(&$out, t);
+    """
+    return out
+end
+
+fn sha256(data: str) -> str
+    return hex_encode(sha256_raw(data))
+end

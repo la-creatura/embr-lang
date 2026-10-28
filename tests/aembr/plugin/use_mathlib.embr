@@ -1,0 +1,12 @@
+import "embrlib"
+import "@LIB@"
+print(scaled(14))
+print(dist2(3.0, 4.0))
+print(fib(20))
+print(quad(5))
+try
+    print(divide(1, 0))
+catch e
+    print(e["kind"], e["message"])
+end
+print(divide(7, 2))

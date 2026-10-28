@@ -1,0 +1,46 @@
+import "embrlib"
+import "@LIB@"
+# the same calls for the C plugin and the aembr one; the output has to be identical
+texts = ["a,b\n1,2\n", "a,b\r\n1,2\r\n", "a,b\r1,2\r", "\xef\xbb\xbfx,y\n1,2", "", "\n\n", "a\n\nb\n", "a,\"b,c\",d\n", "\"x\"\"y\",\"line1\nline2\"\n", ",,\n", "a,b,c", " a , b \n",
+         "\"unterminated\n", "ab\"c,d\n", "\"ab\"c,d\n", "\"a\"\"", "n,v\nA,1\nB,2\n", "n,n\n1,2\n", "n,v\n1\n", "n,v\n1,2,3\n", "a;b;c\n1;\"x;y\";3\n", "a\tb\n1\t2\n"]
+for t in texts
+    for d in [",", ";", "\t"]
+        try
+            print(d, csv_parse(t, d))
+        catch e
+            print(d, "parse error:", e["kind"], e["message"])
+        end
+        try
+            print(d, csv_parse_dicts(t, d))
+        catch e
+            print(d, "dicts error:", e["kind"], e["message"])
+        end
+    end
+end
+for bad in ["", ",,", "\"", "\n", "ab"]
+    try
+        print(csv_parse("a,b", bad))
+    catch e
+        print("delimiter:", e["kind"], e["message"])
+    end
+end
+rows = [["a", "b"], [1, 2.5], ["x,y", "q\"q"], ["", "z"], [" lead", "trail "], ["multi\nline", "cr\rend"], [""], [-3, 1000000.0], ["a;b", "c"]]
+for d in [",", ";"]
+    print(csv_stringify(rows, d))
+end
+print(csv_stringify([], ","))
+print(csv_stringify([[]], ","))
+big = []
+i = 0
+while i < 50
+    append(&big, ["id" + str(i), i, i * 1.5, "t\"" + str(i)])
+    i += 1
+end
+text = csv_stringify(big, ",")
+back = csv_parse(text, ",")
+print(len(text), len(back), back[7], back[49][3])
+print(csv_stringify(back, ",") == text)
+# the delimiter is optional
+print(csv_parse("a,b\n1,2\n"))
+print(csv_parse_dicts("a,b\n1,2\n"))
+print(csv_stringify(rows))

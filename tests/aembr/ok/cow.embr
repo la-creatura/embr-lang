@@ -1,0 +1,29 @@
+# copy on write: a write inside a function or through another name never shows in the original
+import "embrlib"
+fn bump(xs: arr<int>) -> arr<int>
+    xs[0] = xs[0] + 100
+    return xs
+end
+fn first(xs: arr<int>) -> int
+    return xs[0]
+end
+a = [1, 2, 3]
+b = bump(a)
+print(a[0])
+print(b[0])
+c = a
+c[1] = 50
+print(a[1])
+print(c[1])
+d = push(a, 9)
+print(len(a))
+print(len(d))
+names = ["x", "y"]
+more = names
+more[0] = "z"
+print(names[0])
+print(more[0])
+print(first(a))
+append(&a, 7)
+print(len(a))
+print(len(c))

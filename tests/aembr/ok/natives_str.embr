@@ -1,0 +1,32 @@
+# the natives of the str plugin that compile
+import "embrlib"
+import "str"
+fn show_error(f: fn())
+    try
+        f()
+    catch e
+        print(e["kind"] + ": " + e["message"])
+    end
+end
+
+print(join(str_split("a,b,,c", ","), "|"), len(str_split("abc", "")), len(str_split("", ",")), len(str_split("a--b--c", "--")))
+print(str_replace("aaa", "a", "bb"), str_replace("hello", "l", ""), str_replace("abc", "x", "y"))
+show_error(fn() str_replace("abc", "", "y") end)
+print("[" + str_strip("  hi \t\n") + "]", "[" + str_ltrim("  hi  ") + "]", "[" + str_rtrim("  hi  ") + "]", "[" + str_strip("   ") + "]")
+print(str_lower("HeLLo 1"), str_upper("HeLLo 1"))
+print(str_find("hello", "l"), str_find("hello", "z"), str_find("hello", "l", 3), str_find("hello", "l", 4), str_find("hello", "", 2), str_find("hello", "", 9), str_find("hello", "h", -5))
+print(str_startswith("hello", "he"), str_startswith("hello", "lo"), str_endswith("hello", "lo"), str_endswith("hi", "hello"), str_startswith("a", ""))
+print(str_isdigit("123"), str_isdigit("12a"), str_isdigit(""), str_isalpha("abc"), str_isalpha("ab1"), str_isalnum("ab1"), str_isalnum("a b"))
+print(str_count("banana", "an"), str_count("aaaa", "aa"), str_count("abc", ""), str_count("abc", "x"))
+print(str_ord("A"), str_ord("abc"), str_chr(65), str_chr(0) == "", str_chr(255) != "")
+show_error(fn() str_ord("") end)
+show_error(fn() str_chr(256) end)
+show_error(fn() str_chr(-1) end)
+print(str_repeat("ab", 3), str_repeat("x", 0) == "", str_repeat("", 99) == "")
+show_error(fn() str_repeat("a", -1) end)
+show_error(fn() str_repeat("abc", 1000000000) end)
+print(str_reverse("abc"))
+print("[" + str_pad_left("7", 3) + "]", "[" + str_pad_left("7", 3, "0") + "]", "[" + str_pad_right("7", 3) + "]", "[" + str_pad_right("7", 3, "-") + "]", "[" + str_pad_left("long", 2) + "]")
+show_error(fn() str_pad_left("a", 3, "ab") end)
+show_error(fn() str_pad_right("a", 3, "") end)
+show_error(fn() str_pad_left("a", 999999999999) end)

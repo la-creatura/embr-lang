@@ -1,0 +1,22 @@
+import "embrlib"
+# print takes arrays, maps (keys in order), nested ones, and several values
+print([1, 2, 3])
+print([1.5, 2.0, 0.1])
+print(["a", "b"])
+print({"b": 2, "a": 1})
+print([[1, 2], [3]])
+print({"x": [1, 2], "y": [3]})
+print([{"k": "v"}, {"k": "w"}])
+print(len([1, 2]), [4, 5], "s", {"z": 1.5})
+empty = [1]
+remove_last(&empty)
+print(empty)
+local arr<str> none = []
+print(none)
+local map<int> nothing = {}
+print(nothing)
+try
+    error("boom")
+catch e
+    print(e["message"], e["kind"])
+end

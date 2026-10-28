@@ -1,0 +1,6 @@
+# refuse: is a const fn
+const fn f(x)
+    return x
+end
+g = f
+print(1)

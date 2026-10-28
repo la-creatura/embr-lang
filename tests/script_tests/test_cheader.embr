@@ -222,3 +222,48 @@ fn test_ffi_ctype()
     e = assert_raises(fn() return ffi_ctype("NotAType") end)
     assert_true(str_contains_text(e["message"], "unknown C type"))
 end
+
+fn test_function_pointer_typedefs_keep_their_signature()
+    h = cheader_parse("
+        typedef struct Pt { int x; int y; } Pt;
+        typedef int (*Op)(int a, double b);
+        typedef Pt (*Mk)(int n);
+        typedef void (*Tick)(void);
+    ")
+    sigs = {}
+    for t in h["types"]
+        if t["kind"] == "funcptr"
+            sigs[t["name"]] = [t["ret"], t["params"]]
+        end
+    end
+    assert_eq(sigs["Op"], ["int", ["int", "double"]])
+    assert_eq(sigs["Mk"], ["Pt", ["int"]])
+    assert_eq(sigs["Tick"], ["void", []])
+end
+
+fn test_ffi_callback_for_uses_the_typedef()
+    found = find_libc()
+    if len(found) == 0
+        return 0
+    end
+    h = cheader_parse("
+        typedef struct Pt { int x; int y; } Pt;
+        typedef double (*Op)(int a, double b);
+        typedef Pt (*Mk)(int n);
+        typedef void (*Tick)(void);
+    ")
+    r = ffi_bind(found[0], h)
+    assert_eq(r["failed"], {})
+    op = ffi_callback_for("Op", fn(a, b) return a * b end)
+    assert_eq(ffi_call(ffi_fn(op), type_f64(), [type_i32(), type_f64()], [4, 2.5]), 10.0)
+    mk = ffi_callback_for("Mk", fn(n) return {x: n, y: n + 1} end)
+    pt = ffi_ctype("Pt")
+    assert_eq(ffi_call(ffi_fn(mk), pt, [type_i32()], [7]), {x: 7, y: 8})
+    tick = ffi_callback_for("Tick", fn() return 0 end)
+    ffi_call(ffi_fn(tick), nil, [], [])
+    for c in [op, mk, tick]
+        ffi_callback_free(c)
+    end
+    e = assert_raises(fn() return ffi_callback_for("Nope", fn() return 0 end) end)
+    assert_true(str_contains_text(e["message"], "not a function pointer type"))
+end

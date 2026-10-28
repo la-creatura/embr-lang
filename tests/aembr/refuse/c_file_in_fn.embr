@@ -1,0 +1,7 @@
+# refuse: has to be at the top level
+fn f()
+    c file """
+int x;
+    """
+end
+f()

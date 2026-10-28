@@ -25,6 +25,8 @@
 //     another shared_table handle. NOT a plain table() handle, an ffi handle or a closure: none are locked
 //     (table.cpp's Table isn't, and the VM can write a closure's captured frame in place, see vm.h resolveStore),
 //     so sharing one would only move the data race. channel_send()/shared_table_set() raise a clear error instead
+//   - worker_cancel(w) stops a worker at its next loop turn or script call, and wakes it from an empty in_channel.
+//     a native that blocks inside the worker (sleep, http, channel_recv) is not interrupted
 //   - worker_spawn loads its module with loadEmbrModule (core/invoke.h), so the path is relative to the spawning
 //     script's directory, like `import`/load_module(), not the process's cwd
 
@@ -109,10 +111,11 @@ struct Channel {
 
     // blocks until an item is available or the channel is closed and
     // drained (returned as std::nullopt, the latter case)
-    std::optional<Value> recv() {
+    // a worker passes its cancel flag: a set flag also ends the wait, and recv then gives nullopt
+    std::optional<Value> recv(const std::atomic<bool>* cancel = nullptr) {
         std::unique_lock<std::mutex> lock(mu);
-        cv.wait(lock, [&] { return !queue.empty() || closed; });
-        if (queue.empty()) return std::nullopt;
+        cv.wait(lock, [&] { return !queue.empty() || closed || (cancel && cancel->load()); });
+        if (queue.empty() || (cancel && cancel->load())) return std::nullopt;
         Value v = std::move(queue.front());
         queue.pop_front();
         lock.unlock();
@@ -130,6 +133,9 @@ struct Channel {
         cv.notify_all();
         return {true, std::move(v)};
     }
+
+    // for worker_cancel: lets a waiting recv() look at its flag again
+    void wake() { { std::lock_guard<std::mutex> lock(mu); } cv.notify_all(); }
 
     void close() {
         { std::lock_guard<std::mutex> lock(mu); closed = true; }
@@ -173,15 +179,21 @@ static Value errResult(const EmbrError& e) {
     return Value(std::move(m));
 }
 
+// an error result that must not throw or wait: the reader may be gone, the channel closed or full
+static void sendFinal(const std::shared_ptr<Channel>& ch, Value v) {
+    try { ch->trySend(std::move(v)); } catch (const EmbrError&) {}
+}
+
 // the body of every worker thread: builds a fresh private Interpreter, loads the module into it (like `import`,
 // so the module's own `import`s bring in the plugins it needs), resolves fnName, then pulls tasks off inCh,
 // calls fnName(task, ...extraArgs) and pushes the wrapped result to outCh until inCh is closed and drained
 static void workerLoop(std::string scriptDir, std::string modulePath, std::string fnName,
                        std::shared_ptr<Channel> inCh, std::shared_ptr<Channel> outCh,
                        std::vector<Value> extraArgs, PluginPolicy policy, Interpreter::Budget budget, Interpreter::BackendHooks backend, std::string cacheDir,
-                       std::map<std::string, Interpreter::PackageRecord> packages)
+                       std::map<std::string, Interpreter::PackageRecord> packages, std::shared_ptr<std::atomic<bool>> cancel)
 {
     Interpreter workerInterp;
+    workerInterp.setCancelFlag(cancel);
     workerInterp.scriptDir = scriptDir;
     workerInterp.backend = backend;   // the same way into script code as the spawning interpreter has
     workerInterp.setBudget(budget);   // the spawning script's step/time limit applies to the worker too
@@ -199,12 +211,12 @@ static void workerLoop(std::string scriptDir, std::string modulePath, std::strin
                        "\" has no exported function \"" + fnName + "\"");
         fn = workerInterp.getGlobal(fnName);
     } catch (const EmbrError& e) {
-        outCh->send(errResult(e));
+        sendFinal(outCh, errResult(e));
         return;
     }
 
     while (true) {
-        auto task = inCh->recv();
+        auto task = inCh->recv(cancel.get());
         if (!task) break; // inCh closed and drained, this worker is done
 
         std::vector<Value> args;
@@ -215,14 +227,30 @@ static void workerLoop(std::string scriptDir, std::string modulePath, std::strin
         try {
             outCh->send(okResult(embr::invoke(workerInterp, fn, args)));
         } catch (const EmbrError& e) {
-            outCh->send(errResult(e));
+            sendFinal(outCh, errResult(e));
+            if (cancel->load()) break;   // the cancel error is fatal, the interpreter is not used again
         }
     }
 }
 
 struct Worker {
     std::thread th;
+    std::mutex              mu;       // guards done and the join
+    std::condition_variable cv;
+    bool                    done = false;   // the thread function has returned
+    std::shared_ptr<std::atomic<bool>> cancel = std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<Channel> inCh;   // woken by worker_cancel
+
     ~Worker() { if (th.joinable()) th.join(); }
+
+    // waits up to `seconds` (negative: for ever) for the thread to return, then joins it. true if it has
+    bool join(double seconds) {
+        std::unique_lock<std::mutex> lock(mu);
+        if (seconds < 0) cv.wait(lock, [&] { return done; });
+        else if (!cv.wait_for(lock, std::chrono::duration<double>(seconds), [&] { return done; })) return false;
+        if (th.joinable()) th.join();
+        return true;
+    }
 };
 
 EMBR_PLUGIN {
@@ -316,8 +344,16 @@ EMBR_PLUGIN {
         for (const Value& a : extraArgs) a.markShared();   // the worker thread will hold them
 
         auto w = std::make_shared<Worker>();
-        w->th = std::thread(workerLoop, interp->scriptDir, args[0].asString(), args[1].asString(),
-                            inCh, outCh, std::move(extraArgs), interp->pluginPolicy, interp->budget, interp->backend, interp->cacheDir, interp->packages);
+        w->inCh = inCh;
+        Worker* raw = w.get();
+        w->th = std::thread([=, scriptDir = interp->scriptDir, module = args[0].asString(), fn = args[1].asString(),
+                             extra = std::move(extraArgs), policy = interp->pluginPolicy, budget = interp->budget,
+                             backend = interp->backend, cacheDir = interp->cacheDir, packages = interp->packages]() mutable {
+            workerLoop(scriptDir, module, fn, inCh, outCh, std::move(extra), std::move(policy), budget, backend,
+                       std::move(cacheDir), std::move(packages), raw->cancel);
+            { std::lock_guard<std::mutex> lock(raw->mu); raw->done = true; }
+            raw->cv.notify_all();
+        });
         return Value(TypedPtr(w.get(), "parallel.worker", w));
     });
 
@@ -326,8 +362,37 @@ EMBR_PLUGIN {
     // in_channel has been closed and drained). safe to call more than once.
     interp->bindSig("worker_join", {pPtr("w")},
     [](const std::vector<Value>& args) -> Value {
+        args[0].userdata<Worker>("parallel.worker")->join(-1);
+        return Value(0.0);
+    });
+
+    // worker_join_timeout(w, seconds) -> 1 or 0
+    // like worker_join but gives up after `seconds`: 1 when the thread has exited (and is joined), 0 when it is
+    // still running. a worker that never ends can be asked to stop with worker_cancel first
+    interp->bindSig("worker_join_timeout", {pPtr("w"), Param::req("seconds", TS::Num)},
+    [](const std::vector<Value>& args) -> Value {
+        double secs = std::max(0.0, args[1].asNumber());
+        return Value(args[0].userdata<Worker>("parallel.worker")->join(secs) ? (int64_t)1 : (int64_t)0);
+    });
+
+    // worker_alive(w) -> 1 or 0
+    interp->bindSig("worker_alive", {pPtr("w")},
+    [](const std::vector<Value>& args) -> Value {
         auto* w = args[0].userdata<Worker>("parallel.worker");
-        if (w->th.joinable()) w->th.join();
+        std::lock_guard<std::mutex> lock(w->mu);
+        return Value(w->done ? (int64_t)0 : (int64_t)1);
+    });
+
+    // worker_cancel(w) -> 0
+    // asks the worker to stop. it ends at its next loop turn or script call (the same place the step limit is
+    // checked) with an error try/catch cannot catch, and a worker waiting for a task wakes up and ends. a native
+    // that blocks (sleep, http, channel_recv inside the task) is not interrupted. it does not wait: use
+    // worker_join or worker_join_timeout after it. safe to call more than once
+    interp->bindSig("worker_cancel", {pPtr("w")},
+    [](const std::vector<Value>& args) -> Value {
+        auto* w = args[0].userdata<Worker>("parallel.worker");
+        w->cancel->store(true);
+        w->inCh->wake();
         return Value(0.0);
     });
 
@@ -450,14 +515,14 @@ EMBR_PLUGIN {
     // what each always returns (see Value::Callable::returns)
     interp->setResultTypes({
         {"channel", TS::Ptr}, {"channel_send", TS::Float}, {"channel_try_send", TS::Int}, {"channel_try_recv", TS::Arr}, {"channel_close", TS::Float},
-        {"channel_len", TS::Int}, {"channel_closed", TS::Int}, {"worker_spawn", TS::Ptr}, {"worker_join", TS::Float}, {"shared_table", TS::Ptr},
+        {"channel_len", TS::Int}, {"channel_closed", TS::Int}, {"worker_spawn", TS::Ptr}, {"worker_join", TS::Float}, {"worker_join_timeout", TS::Int}, {"worker_alive", TS::Int}, {"worker_cancel", TS::Float}, {"shared_table", TS::Ptr},
         {"shared_table_set", TS::Float}, {"shared_table_has", TS::Int}, {"shared_table_delete", TS::Int}, {"shared_table_len", TS::Int},
         {"shared_table_clear", TS::Float}, {"shared_table_keys", TS::Arr}, {"shared_table_values", TS::Arr}, {"shared_table_items", TS::Arr},
     });
 }
 
 // what this plugin says about itself. embr reads it before it runs embr_register (see core/plugininfo.h)
-EMBR_PLUGIN_INFO("parallel", "1.0.0", "isolated-interpreter-per-thread concurrency", EMBR_CAP_THREADS, EMBR_CAP_NONE,
+EMBR_PLUGIN_INFO("parallel", "1.1.0", "isolated-interpreter-per-thread concurrency", EMBR_CAP_THREADS, EMBR_CAP_NONE,
     {"channel", "0/omitted = unbounded; otherwise channel_send blocks once that many items are queued"},
     {"channel_close", "wakes any blocked recv/send"},
     {"channel_closed", "1 if the channel has been closed, else 0"},
@@ -477,5 +542,8 @@ EMBR_PLUGIN_INFO("parallel", "1.0.0", "isolated-interpreter-per-thread concurren
     {"shared_table_set", "same semantics as table's equivalents, lock-guarded"},
     {"shared_table_update", "atomic read-modify-write: cur = t[key] if present else default, then stores and returns fn(cur), all under one lock. the safe way to build a counter or accumulator (a get + set pair from script would race)"},
     {"shared_table_values", "an array of the values"},
+    {"worker_alive", "1 while the worker's thread is still running, else 0"},
+    {"worker_cancel", "asks the worker to stop at its next loop turn or script call (an error try/catch cannot catch), and wakes it from an empty in_channel. does not wait. a blocking native in the task is not interrupted"},
     {"worker_join", "blocks until the thread has exited; safe to call more than once"},
+    {"worker_join_timeout", "like worker_join but gives up after the given seconds: 1 when the thread has exited, 0 when it is still running"},
     {"worker_spawn", "starts a thread with its own private Interpreter; loads module_path exactly like import (resolved relative to the *spawning* script's directory); loops recv → fn_name(task, ...extra_args) → send(wrapped result) until in_channel closes"});

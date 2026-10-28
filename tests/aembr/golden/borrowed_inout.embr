@@ -1,0 +1,14 @@
+# a variable given both as a read-only argument and as &name: the argument has to stay alive while the callee replaces it
+import "embrlib"
+fn both(a: arr<int>, &b: arr<int>) -> int
+    b = [5, 5, 5, 5]
+    return len(a) + a[0]
+end
+local zs = [1, 2, 3]
+print(both(zs, &zs), zs)
+local s = "abc"
+fn both_s(a: str, &b: str) -> str
+    b = "zz"
+    return a
+end
+print(both_s(s, &s), s)

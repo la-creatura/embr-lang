@@ -1,0 +1,20 @@
+# the library written in aembr (std/str.embr, std/embrmath.embr) has locals of its own: a top level name of this file with the same name is not touched
+import "str"
+import "embrmath"
+import "embrlib"
+r = 5
+s = "kept"
+a = 1
+t = 2
+n = 3
+x = 4
+fn shout(w: str) -> str
+    return str_upper(w) + str_pad_left("!", 3, ".")
+end
+fn parts(text: str) -> arr<str>
+    return str_split(str_strip(text), ",")
+end
+print(shout("hey"), parts(" a,b,c "), str_replace("aXbXc", "X", "-"))
+print(math_abs(-4), math_abs(-2.5), math_floor(2.7), math_min(3, 2), math_max(1.5, 2.5), math_clamp(9, 0, 5), math_sqrt(16))
+print(r, s, a, t, n, x)
+print(num_fixed(3, 2), num_fixed(2.5, 1), str_find("hello", "l"), str_find("hello", "l", 3), str_count("banana", "an"))
