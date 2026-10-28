@@ -239,7 +239,7 @@ contact me on discord or open an issue
 
 ## license
 
-this project is licensed under the gpl-3.0. see [LICENSE](LICENSE) for details
+this project is licensed under the mit license. see [LICENSE](LICENSE) for details
 
 ---
 
