@@ -12,6 +12,9 @@
 #include <system_error>
 #include <charconv>
 #include <cstdlib>
+#include <cerrno>
+#include <cctype>
+#include <cmath>
 
 namespace embr {
 
@@ -19,7 +22,7 @@ namespace embr {
 // its body lives there. only the declaration lives here
 struct Token;
 
-// cxxdroid ships an old libc++ without double from_chars
+// cxxdroid and macOS ship a libc++ without double from_chars
 struct parse_result { const char* ptr; std::errc ec; };
 
 inline parse_result parse_double(const char* first, const char* last, double& value) {
@@ -27,11 +30,20 @@ inline parse_result parse_double(const char* first, const char* last, double& va
     auto res = std::from_chars(first, last, value);
     return {res.ptr, res.ec};
 #else
-    (void)last;  // strtod stops at the terminating NUL, so it doesn't need the end pointer
+    // strtod needs a NUL at the end. from_chars takes no leading space or '+', and stops a hex number at the x
+    std::string text(first, last);
+    if (text.empty() || std::isspace(static_cast<unsigned char>(text[0])) || text[0] == '+') return {first, std::errc::invalid_argument};
+    const size_t x = text.find_first_of("xX");
+    if (x != std::string::npos) text.resize(x);
     char* end;
-    value = std::strtod(first, &end);
-    if (end == first) return {first, std::errc::invalid_argument};
-    return {end, std::errc{}};
+    errno = 0;
+    const double d = std::strtod(text.c_str(), &end);
+    if (end == text.c_str()) return {first, std::errc::invalid_argument};
+    const char* stop = first + (end - text.c_str());
+    // too big or too small to keep is an error
+    if (errno == ERANGE && (d == 0 || d == HUGE_VAL || d == -HUGE_VAL)) return {stop, std::errc::result_out_of_range};
+    value = d;
+    return {stop, std::errc{}};
 #endif
 }
 

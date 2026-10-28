@@ -84,7 +84,9 @@ for n in higher_order closure_bench const_fn nested; do
     got="$("$aembr" run --fatal-overflow "$f" 2>&1 | sed -E 's|file: "[^"]*"|file: "F"|g')"
     [[ "$got" == "$want" ]] || bad "fatal-overflow $n" "output differs from the VM"
 done
-out="$(timeout 120 "$aembr" run --fatal-overflow "$dir/error/recursion.embr" 2>&1)"; rc=$?
+# macos has no `timeout` (coreutils calls it gtimeout), without either this runs with no time limit
+if command -v timeout >/dev/null; then limit="timeout 120"; elif command -v gtimeout >/dev/null; then limit="gtimeout 120"; else limit=""; fi
+out="$($limit "$aembr" run --fatal-overflow "$dir/error/recursion.embr" 2>&1)"; rc=$?
 [[ $rc -eq 1 && "$out" == "error: stack overflow: the stack budget is used up at line 1" ]] || bad fatal-overflow "exit $rc: ${out:0:200}"
 out="$("$aembr" plugin --fatal-overflow "$dir/plugin/clib.embr" -o "$work/nofatal.so" 2>&1)"; rc=$?
 [[ $rc -ne 0 && "$out" == *"--fatal-overflow is for programs"* ]] || bad fatal-overflow "a plugin should refuse the flag: ${out:0:200}"

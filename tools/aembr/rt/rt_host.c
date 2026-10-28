@@ -23,6 +23,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#define RT_PLUGIN_EXT ".dylib"
+#else
+#define RT_PLUGIN_EXT ".so"
+#endif
 
 /* ---- the objects behind an EmbrValue of tag ARRAY and MAP */
 
@@ -422,7 +428,12 @@ static void* open_by_name(const char* name, const char* scriptDir) {
     static char dirs[16][8300];
     int nd = 0;
     char exe[4096];
+#if defined(__APPLE__)
+    uint32_t sz = sizeof exe;
+    ssize_t n = _NSGetExecutablePath(exe, &sz) == 0 ? (ssize_t)strlen(exe) : -1;
+#else
     ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+#endif
     if (scriptDir && *scriptDir) snprintf(dirs[nd++], sizeof dirs[0], "%s", scriptDir);
     if (n > 0) {
         exe[n] = 0;
@@ -441,7 +452,7 @@ static void* open_by_name(const char* name, const char* scriptDir) {
     }
     snprintf(dirs[nd++], sizeof dirs[0], ".");
     for (int i = 0; i < nd; ++i) {
-        const char* sub[2] = {"%s/%s.so", "%s/plugins/%s.so"};
+        const char* sub[2] = {"%s/%s" RT_PLUGIN_EXT, "%s/plugins/%s" RT_PLUGIN_EXT};
         for (int k = 0; k < 2; ++k) {
             char* p = NULL;
             if (asprintf(&p, sub[k], dirs[i], name) < 0) continue;
