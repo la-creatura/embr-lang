@@ -205,10 +205,9 @@ jobs:
           wineboot --init   # make the wine prefix once, before the tests start in parallel
           ctest --test-dir build/windows-release -j"$(nproc)" --output-on-failure --timeout "$CTEST_TIMEOUT"
 
-  # macos has not been built by the maintainer yet (no mac available). this job exists so the first real run
-  # shows what is left to fix. continue-on-error keeps it from blocking merges until it has been green once,
-  # then delete that line. Homebrew's libffi and openssl@3 are keg-only, the cmake files look for them in both
-  # brew prefixes.
+  # macos works on CI at least, but i don't have a real mac to test it on. continue-on-error keeps it
+  # from blocking merges until it has been green once, then delete that line.
+  # Homebrew's libffi and openssl@3 are keg-only, the cmake files look for them in both brew prefixes.
   macos:
     name: macos (experimental, not yet verified)
     runs-on: macos-latest
