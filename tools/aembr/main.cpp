@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
     if (c.asPlugin) {
         if (c.out.empty()) {
             std::filesystem::path p(c.in);
-            c.out = (p.parent_path() / (p.stem().string() + ".so")).string();
+            c.out = (p.parent_path() / (p.stem().string() + embr::PLUGIN_EXT)).string();
         }
         rq.pluginName = std::filesystem::path(c.out).stem().string();
     }

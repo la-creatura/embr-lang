@@ -11,7 +11,7 @@ namespace aembr {
 
 bool readPlugin(const std::string& name, const std::string& scriptDir, PluginDesc& out, std::string& err) {
     namespace fs = std::filesystem;
-    const auto cands = embr::fileCandidates(name, scriptDir, ".so", "plugins");
+    const auto cands = embr::fileCandidates(name, scriptDir, embr::PLUGIN_EXT, "plugins");
     const fs::path found = embr::findExistingCandidate(cands);
     if (found.empty()) {
         err = "cannot find the plugin \"" + name + "\", tried:" + embr::describeCandidates(cands);

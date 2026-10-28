@@ -160,6 +160,10 @@ bool buildExecutable(const std::string& cText, const std::string& outPath, const
     for (const std::string& a : o.cflags) argv.push_back(a);
     for (const std::string& a : {"-I" + rt, cFile, rt + (o.stats ? "/libaembr_rt_stats.a" : "/libaembr_rt.a")}) argv.push_back(a);
     for (const std::string& a : o.libs) argv.push_back(a);
+#if defined(__APPLE__)
+    // the linker writes a library's install name into it, by default the whole -o path. the file name alone keeps two builds equal
+    if (o.shared) argv.push_back("-Wl,-install_name,@rpath/" + std::filesystem::path(outPath).filename().string());
+#endif
     for (const std::string& a : {std::string("-lm"), std::string("-ldl"), std::string("-o"), outPath}) argv.push_back(a);
     const int rc = spawnWait(argv, true);
     std::remove(cFile.c_str());

@@ -552,7 +552,8 @@ struct Emitter {
     }
 
     std::string head(const Fn& f, bool isMain) const {
-        std::string h = std::string(f.tmpl ? "static inline " : f.builtin ? "static __attribute__((unused)) " : "static ") + std::string(isMain ? "void" : cty(f.ret)) + " " + (isMain ? "embr_main" : fname(f)) + "(";
+        // unused: an imported module or the library can bring functions a program never calls, and clang warns about them
+        std::string h = std::string(f.tmpl ? "static inline " : "static __attribute__((unused)) ") + std::string(isMain ? "void" : cty(f.ret)) + " " + (isMain ? "embr_main" : fname(f)) + "(";
         bool first = true;
         if (f.canRaise) { h += "RtCtx* cx __attribute__((unused))"; first = false; }
         if (f.isClosure) { h += ", EmbrClosure* self __attribute__((unused))"; }
@@ -786,7 +787,7 @@ struct Emitter {
         if (!record.empty()) os << "__attribute__((used)) static const char aembr_record[] = " << quoted(recordBegin() + record + recordEnd()) << ";\n\n";
         for (size_t i = 0; i < m.strings.size(); ++i) {
             const size_t n = m.strings[i].size();
-            os << "static struct { int64_t rc, len, cap; char d[" << n + 1 << "]; } embr_lit" << i << " = { EMBR_IMMORTAL, " << n << ", " << n
+            os << "static __attribute__((unused)) struct { int64_t rc, len, cap; char d[" << n + 1 << "]; } embr_lit" << i << " = { EMBR_IMMORTAL, " << n << ", " << n
                << ", " << quoted(m.strings[i]) << " };\n";
         }
         if (!m.strings.empty()) os << "\n";

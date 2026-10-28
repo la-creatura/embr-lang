@@ -8,5 +8,6 @@ here = os_script_dir()
 
 fn test_the_folder_holds_this_file()
     assert_eq(fs_exists(here + "/test_script_dir.embr"), 1)
-    assert_eq(here[0], "/")
+    # an absolute path: /x, or C:\x on windows
+    assert_eq(here[0] == "/" or here[1] == ":", 1)
 end

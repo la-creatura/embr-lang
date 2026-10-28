@@ -9,6 +9,16 @@ work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 fail=0
 bad() { echo "FAIL [$1]: $2"; fail=1; }
 
+# in a sanitizer build the shipped plugins need the ASan runtime loaded first, so a program that imports one is built with it too
+sanitized=0
+plugin="$(ls "$(dirname "$embr")"/plugins/*.so 2>/dev/null | head -1)"
+if [[ -n "$plugin" ]] && command -v ldd >/dev/null && ldd "$plugin" | grep -q libasan; then
+    printf '#!/bin/sh\nexec cc -fsanitize=address,undefined "$@"\n' > "$work/san-cc"
+    chmod +x "$work/san-cc"
+    export CC="$work/san-cc"
+    sanitized=1
+fi
+
 # 1. programs that mean the same in both: same output
 for f in "$dir"/ok/*.embr; do
     n="$(basename "$f" .embr)"
@@ -100,9 +110,12 @@ for f in "$dir"/ok/*.embr "$dir"/wrap.embr; do
     cc -std=gnu11 -Wall -Wextra -Werror -fsyntax-only -I"$rt" "$work/$n.c" 2> "$work/cc.err" || bad "emit-c $n" "cc warns: $(head -3 "$work/cc.err")"
     "$aembr" build --emit-c "$f" | cmp -s - "$work/$n.c" || bad "repro $n" "two runs gave different C"
 done
-"$aembr" build "$dir/ok/fib.embr" -o "$work/a" && "$aembr" build "$dir/ok/fib.embr" -o "$work/b" || bad repro "build failed"
-cmp -s "$work/a" "$work/b" || bad repro "two builds gave different programs"
-[[ "$("$work/a")" == "$("$embr" "$dir/ok/fib.embr")" ]] || bad build "the built program prints something else"
+# the same file name in two folders: macOS writes the name into the program's signature.
+# ASan writes the temp path of the C file into it, so a sanitizer build is never the same twice
+mkdir -p "$work/a" "$work/b"
+"$aembr" build "$dir/ok/fib.embr" -o "$work/a/fib" && "$aembr" build "$dir/ok/fib.embr" -o "$work/b/fib" || bad repro "build failed"
+(( sanitized )) || cmp -s "$work/a/fib" "$work/b/fib" || bad repro "two builds gave different programs"
+[[ "$("$work/a/fib")" == "$("$embr" "$dir/ok/fib.embr")" ]] || bad build "the built program prints something else"
 
 # a plugin that needs a capability can be refused when the program is compiled
 printf 'import "fs"\nprint(fs_exists("/"))\n' > "$work/needfs.embr"

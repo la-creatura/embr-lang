@@ -153,8 +153,13 @@ extern EmbrStr* const rt_empty_str;          /* what a str variable holds before
 /* a count at or above EMBR_IMMORTAL is never changed: a literal, and a constant a plugin made when it was imported, which several threads can
    read at once. nothing writes to such an object, so there is nothing to race on, and `rc == 1` (the test for "nobody else holds it") is false */
 static inline EmbrStr* rt_retain_str(EmbrStr* s) { if (s && s->rc < EMBR_IMMORTAL) { RT_STAT(retain_str); ++s->rc; } return s; }
-/* not inlined: when a literal is known at the call, the compiler would warn about freeing it, on a path that is never taken */
-static __attribute__((noinline, noclone)) void rt_free_str(EmbrStr* s) { RT_STAT(free_str); free(s); }
+/* not inlined: when a literal is known at the call, the compiler would warn about freeing it, on a path that is never taken. clang has no noclone */
+#if defined(__clang__)
+static __attribute__((noinline)) void
+#else
+static __attribute__((noinline, noclone)) void
+#endif
+rt_free_str(EmbrStr* s) { RT_STAT(free_str); free(s); }
 static inline void rt_release_str(EmbrStr* s) { if (s && s->rc < EMBR_IMMORTAL) { RT_STAT(release_str); if (--s->rc == 0) rt_free_str(s); } }
 static inline void rt_set_str(EmbrStr** d, EmbrStr* v) { rt_retain_str(v); rt_release_str(*d); *d = v; }   /* d = v, keeping its own count */
 static inline void rt_own_str(EmbrStr** d, EmbrStr* v) { EmbrStr* o = *d; *d = v; rt_release_str(o); }   /* d takes over v's count */

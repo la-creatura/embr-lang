@@ -7,7 +7,7 @@
 //   aembr verify PKG.pmbr                                    check a package against its own source (the claim, then the bytes)
 //
 // good to know
-//   - a package holds: meta.embr, lib/<platform>/<name>.so, src/<the source file> and aembr/build.json (the record, record.h)
+//   - a package holds: meta.embr, lib/<platform>/<name>.so (.dylib on macOS), src/<the source file> and aembr/build.json (the record, record.h)
 //   - verify has two levels. the claim: the capabilities worked out again from the bundled source must be inside what the package declares.
 //     the bytes: when this machine has the same aembr, C compiler and runtime as the record, the library is built again and must have the same
 //     sha256. a different toolchain is said, and is exit code 2, not 1
@@ -117,7 +117,7 @@ int packageCommand(const Cli& c) {
     TempGuard stage{tempDir("aembr-pkg")};
     if (stage.path.empty()) { std::cerr << "aembr: cannot make a temp folder\n"; return 2; }
     const std::string target = embr::hostTarget();
-    const std::string libLabel = "lib/" + target + "/" + name + ".so";
+    const std::string libLabel = "lib/" + target + "/" + name + embr::PLUGIN_EXT;
     BuildOptions bo = c.bo;
     bo.shared = true;
     std::error_code mk;
@@ -283,7 +283,8 @@ int verifyCommand(const Cli& c) {
         std::cout << "bytes: WRONG. the library " << label << " in the file does not match its hash in the table of contents\n";
         return 1;
     }
-    const std::string rebuilt = work.path + "/rebuilt.so";
+    // the same file name as in the package: on macOS the name is written into the library
+    const std::string rebuilt = work.path + "/" + fs::path(label).filename().string();
     if (!buildExecutable(comp.c, rebuilt, bo, c.exeDir, err)) { std::cerr << err; return 2; }
     unsigned char d[32];
     const std::string lib = readAll(rebuilt);

@@ -4,6 +4,7 @@
 #
 #   aembr_plugin_smoke.sh <aembr binary> <embr binary> <tests/aembr folder>
 set -u
+ext=.so; [[ "$(uname)" == Darwin ]] && ext=.dylib   # what embr looks for when it imports a plugin
 aembr="$(realpath "$1")"; embr="$(realpath "$2")"; dir="$(realpath "$3")"     # it changes folder below
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 fail=0
@@ -11,7 +12,7 @@ bad() { echo "FAIL [$1]: $2"; fail=1; }
 
 # 1. the same file as a compiled plugin and as a script module: same output
 for n in mathlib strlib fslib anylib; do
-    "$aembr" plugin "$dir/plugin/$n.embr" -o "$work/$n.so" || { bad "$n" "aembr plugin failed"; continue; }
+    "$aembr" plugin "$dir/plugin/$n.embr" -o "$work/$n$ext" || { bad "$n" "aembr plugin failed"; continue; }
     cp "$dir/plugin/$n.embr" "$work/$n.embr"
     sed "s/@LIB@/$n/" "$dir/plugin/use_$n.embr" > "$work/p_$n.embr"
     sed "s/@LIB@/$n.embr/" "$dir/plugin/use_$n.embr" > "$work/v_$n.embr"
@@ -21,16 +22,16 @@ for n in mathlib strlib fslib anylib; do
 done
 
 # 1b. a plugin written with C text: C for the whole file, C in functions, a flag for the C compiler. embr and aembr programs both use it
-"$aembr" plugin "$dir/plugin/clib.embr" -o "$work/clib.so" -DCLIB_SCALE=7 || bad clib "aembr plugin failed"
+"$aembr" plugin "$dir/plugin/clib.embr" -o "$work/clib$ext" -DCLIB_SCALE=7 || bad clib "aembr plugin failed"
 cp "$dir/plugin/use_clib.embr" "$work/use_clib.embr"
 got="$(cd "$work" && EMBR_PATH="$work" "$embr" use_clib.embr 2>&1 | grep -v '^\[runtime\]')"
 [[ "$got" == "$(cat "$dir/plugin/use_clib.out")" ]] || bad clib-embr "embr gave: ${got:0:200}"
 got="$(cd "$work" && "$aembr" run use_clib.embr 2>&1)"
 [[ "$got" == "$(cat "$dir/plugin/use_clib.out")" ]] || bad clib-aembr "aembr gave: ${got:0:200}"
-"$aembr" info "$work/clib.so" | grep -q -- "-DCLIB_SCALE=7" || bad clib-info "the build record should name the flag"
+"$aembr" info "$work/clib$ext" | grep -q -- "-DCLIB_SCALE=7" || bad clib-info "the build record should name the flag"
 
 # 1b2. a plugin made of two files: the module's functions are used, not exported
-"$aembr" plugin "$dir/plugin/withmod.embr" -o "$work/withmod.so" || bad withmod "aembr plugin failed"
+"$aembr" plugin "$dir/plugin/withmod.embr" -o "$work/withmod$ext" || bad withmod "aembr plugin failed"
 cp "$dir/plugin/use_withmod.embr" "$work/use_withmod.embr"
 got="$(cd "$work" && EMBR_PATH="$work" "$embr" use_withmod.embr 2>&1 | grep -v '^\[runtime\]')"
 [[ "$got" == "$(cat "$dir/plugin/use_withmod.out")" ]] || bad withmod-embr "embr gave: ${got:0:200}"
@@ -38,13 +39,13 @@ out="$(cd "$work" && EMBR_PATH="$work" "$embr" plugin withmod 2>&1)"
 [[ "$out" == *"triple("* && "$out" == *"hey("* && "$out" != *"scale("* && "$out" != *"shout("* ]] || bad withmod-exports "only the file's own functions are exported: ${out:0:300}"
 
 # 1b3. a plugin that imports another plugin (found by name when it is built and when it runs)
-EMBR_PATH="$work" "$aembr" plugin "$dir/plugin/chain.embr" -o "$work/chain.so" || bad chain "aembr plugin failed"
+EMBR_PATH="$work" "$aembr" plugin "$dir/plugin/chain.embr" -o "$work/chain$ext" || bad chain "aembr plugin failed"
 cp "$dir/plugin/use_chain.embr" "$work/use_chain.embr"
 got="$(cd "$work" && EMBR_PATH="$work" "$embr" use_chain.embr 2>&1 | grep -v '^\[runtime\]')"
 [[ "$got" == "$(cat "$dir/plugin/use_chain.out")" ]] || bad chain-embr "embr gave: ${got:0:200}"
 
 # 1c. host values: a parameter read where the host keeps it, a result written into the host's slot
-"$aembr" plugin "$dir/plugin/hostlib.embr" -o "$work/hostlib.so" || bad hostlib "aembr plugin failed"
+"$aembr" plugin "$dir/plugin/hostlib.embr" -o "$work/hostlib$ext" || bad hostlib "aembr plugin failed"
 cp "$dir/plugin/use_hostlib.embr" "$work/use_hostlib.embr"
 got="$(cd "$work" && EMBR_PATH="$work" "$embr" use_hostlib.embr 2>&1 | grep -v '^\[runtime\]')"
 [[ "$got" == "$(cat "$dir/plugin/use_hostlib.out")" ]] || bad hostlib-embr "embr gave: ${got:0:300}"
@@ -59,7 +60,7 @@ info="$(EMBR_PATH="$work" "$embr" plugin mathlib 2>&1)"
 
 # 3. capabilities are computed from the file and checked by the host before any code runs
 sed 's/"capabilities": \[\]/"capabilities": ["network"]/' "$dir/plugin/mathlib.embr" > "$work/netlib.embr"
-"$aembr" plugin "$work/netlib.embr" -o "$work/netlib.so" || bad netlib "aembr plugin failed"
+"$aembr" plugin "$work/netlib.embr" -o "$work/netlib$ext" || bad netlib "aembr plugin failed"
 printf 'import "netlib"\nprint(scaled(2))\n' > "$work/n.embr"
 [[ "$(EMBR_PATH="$work" "$embr" "$work/n.embr" 2>/dev/null)" == "6" ]] || bad netlib-run "wrong answer"
 out="$(EMBR_PATH="$work" "$embr" --deny-caps=network "$work/n.embr" 2>&1)"
@@ -69,14 +70,14 @@ out="$(EMBR_PATH="$work" "$embr" --deny-caps=network "$work/n.embr" 2>&1)"
 info="$(EMBR_PATH="$work" "$embr" plugin fslib 2>&1)"
 [[ "$info" == *"needs: filesystem"* ]] || bad fslib-caps "$info"
 sed 's/"capabilities": \["filesystem"\]/"capabilities": []/' "$dir/plugin/fslib.embr" > "$work/fsbad.embr"
-out="$("$aembr" plugin "$work/fsbad.embr" -o "$work/fsbad.so" 2>&1)"; rc=$?
+out="$("$aembr" plugin "$work/fsbad.embr" -o "$work/fsbad$ext" 2>&1)"; rc=$?
 [[ $rc -eq 1 && "$out" == *"filesystem"* ]] || bad fslib-undeclared "exit $rc: ${out:0:200}"
 
 # 4. what cannot be exported is refused, with the reason
 refuse() {   # name, source, words
     printf '%s\n' "$2" > "$work/r_$1.embr"
     local out rc
-    out="$("$aembr" plugin "$work/r_$1.embr" -o "$work/r_$1.so" 2>&1)"; rc=$?
+    out="$("$aembr" plugin "$work/r_$1.embr" -o "$work/r_$1$ext" 2>&1)"; rc=$?
     [[ $rc -eq 1 && "$out" == *"$3"* ]] || bad "refuse $1" "exit $rc, wanted '$3': ${out:0:200}"
 }
 refuse callback 'fn apply(f: fn(int) -> int, x: int) -> int
@@ -136,9 +137,9 @@ end' "no function to export"
 
 # 5. the same input gives the same plugin
 mkdir -p "$work/a" "$work/b"
-"$aembr" plugin "$dir/plugin/strlib.embr" -o "$work/a/strlib.so" || bad repro "build failed"
-"$aembr" plugin "$dir/plugin/strlib.embr" -o "$work/b/strlib.so" || bad repro "build failed"
-cmp -s "$work/a/strlib.so" "$work/b/strlib.so" || bad repro "two builds gave different plugins"
+"$aembr" plugin "$dir/plugin/strlib.embr" -o "$work/a/strlib$ext" || bad repro "build failed"
+"$aembr" plugin "$dir/plugin/strlib.embr" -o "$work/b/strlib$ext" || bad repro "build failed"
+cmp -s "$work/a/strlib$ext" "$work/b/strlib$ext" || bad repro "two builds gave different plugins"
 
 (( fail )) && exit 1
 echo "aembr_plugin_smoke: ok"

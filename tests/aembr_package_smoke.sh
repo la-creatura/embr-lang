@@ -5,6 +5,7 @@
 #
 #   aembr_package_smoke.sh <aembr binary> <embr binary> <tests/aembr folder>
 set -u
+ext=.so; [[ "$(uname)" == Darwin ]] && ext=.dylib   # what embr looks for when it imports a plugin
 aembr="$(realpath "$1")"; embr="$(realpath "$2")"; dir="$(realpath "$3")"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 fail=0
@@ -16,12 +17,12 @@ mkdir -p "$work/a" "$work/b" "$work/pk"
 cp "$dir/plugin/mathlib.embr" "$work/pk/mathlib.embr"
 sed "s/@LIB@/mathlib/" "$dir/plugin/use_mathlib.embr" > "$work/pk/p.embr"
 sed "s/@LIB@/mathlib.embr/" "$dir/plugin/use_mathlib.embr" > "$work/pk/v.embr"
-rm -f "$work/pk/mathlib.so"
+rm -f "$work/pk/mathlib$ext"
 got="$(cd "$work/pk" && "$embr" p.embr 2>&1 | grep -v '^\[runtime\]')"
 want="$(cd "$work/pk" && "$embr" v.embr 2>&1 | grep -v '^\[runtime\]')"
 [[ -n "$got" && "$got" == "$want" ]] || bad import "the package and the module disagree: $(diff <(echo "$got") <(echo "$want") | head -5)"
 out="$("$embr" package "$work/pk/mathlib.pmbr" 2>&1)"
-[[ "$out" == *"mathlib 1.2.0"* && "$out" == *"aembr/build.json"* && "$out" == *"src/mathlib.embr"* && "$out" == *"lib/"*"/mathlib.so"* ]] || bad contents "$out"
+[[ "$out" == *"mathlib 1.2.0"* && "$out" == *"aembr/build.json"* && "$out" == *"src/mathlib.embr"* && "$out" == *"lib/"*"/mathlib$ext"* ]] || bad contents "$out"
 
 # 1b. a package of a plugin that imports a module: the module is in the package, and verify rebuilds the same bytes from it
 "$aembr" package "$dir/plugin/withmod.embr" -o "$work/pk/withmod.pmbr" > "$work/pack2.out" 2>&1 || bad package-modules "failed: $(cat "$work/pack2.out")"
@@ -75,7 +76,7 @@ out="$("$aembr" verify "$work/pk/liar.pmbr" 2>&1)"; rc=$?
 
 #    a library changed inside the file
 cp "$work/pk/mathlib.pmbr" "$work/pk/damaged.pmbr"
-size=$(stat -c %s "$work/pk/damaged.pmbr")
+size=$(wc -c < "$work/pk/damaged.pmbr")
 printf '\xff' | dd of="$work/pk/damaged.pmbr" bs=1 seek=$((size / 2)) count=1 conv=notrunc 2>/dev/null
 out="$("$aembr" verify "$work/pk/damaged.pmbr" 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] || bad verify-damaged "a changed package verified: $out"
@@ -104,8 +105,8 @@ out="$("$aembr" info "$work/pk/fslib.pmbr" 2>&1)"
 "$aembr" build "$dir/ok/fib.embr" -o "$work/fib" >/dev/null 2>&1 || bad build "aembr build failed"
 out="$("$aembr" info "$work/fib" 2>&1)"
 [[ "$out" == *"program"* && "$out" == *"source: fib.embr"* ]] || bad info-program "$out"
-"$aembr" plugin "$dir/plugin/mathlib.embr" -o "$work/mathlib.so" >/dev/null 2>&1
-out="$("$aembr" info "$work/mathlib.so" 2>&1)"
+"$aembr" plugin "$dir/plugin/mathlib.embr" -o "$work/mathlib$ext" >/dev/null 2>&1
+out="$("$aembr" info "$work/mathlib$ext" 2>&1)"
 [[ "$out" == *"plugin mathlib"* ]] || bad info-plugin "$out"
 "$aembr" info "$embr" >/dev/null 2>&1; [[ $? -eq 1 ]] || bad info-other "a file without a record should be exit 1"
 

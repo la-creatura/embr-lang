@@ -145,7 +145,7 @@ copied next to the runtime (`<bin>/aembr-rt/std/`) and their hash is part of the
 ## trust and packages
 
 every output carries a record (aembr version, kind, source name and sha256, capabilities, the C compiler's version line, the flags, the sha256 of the runtime, the platform) as text inside the file, found by scanning, so `aembr info` never loads a
-library. output is deterministic (no timestamps or absolute paths), so the same input gives the same bytes. `aembr package` hands a folder (`meta.embr`, `lib/<platform>/<name>.so`, `src/`, `aembr/build.json`) to the same `buildPackage` as `embr pack`
+library. output is deterministic (no timestamps or absolute paths), so the same input gives the same bytes. `aembr package` hands a folder (`meta.embr`, `lib/<platform>/<name>.so` (`.dylib` on macOS), `src/`, `aembr/build.json`) to the same `buildPackage` as `embr pack`
 and signs with the same key tooling. `aembr verify PKG.pmbr` checks the claim (capabilities recomputed from the bundled source must be inside what the package declares) and, when aembr, the compiler, the runtime and the platform are the recorded ones,
 the bytes (the library is built again and its sha256 must match). exit codes: 0 verified, 1 a mismatch, 2 could not verify.
 

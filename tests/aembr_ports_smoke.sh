@@ -4,13 +4,14 @@
 #
 #   aembr_ports_smoke.sh <aembr binary> <embr binary> <tools/aembr/ports folder>
 set -u
+ext=.so; [[ "$(uname)" == Darwin ]] && ext=.dylib   # what embr looks for when it imports a plugin
 aembr="$(realpath "$1")"; embr="$(realpath "$2")"; ports="$(realpath "$3")"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 fail=0
 bad() { echo "FAIL [$1]: $2"; fail=1; }
 
 for n in encoding path csv json; do
-    "$aembr" plugin "$ports/a$n.embr" -o "$work/a$n.so" || { bad "$n" "aembr plugin failed"; continue; }
+    "$aembr" plugin "$ports/a$n.embr" -o "$work/a$n$ext" || { bad "$n" "aembr plugin failed"; continue; }
     for lib in "$n" "a$n"; do
         sed "s/@LIB@/$lib/" "$ports/compare_$n.embr" > "$work/c_$lib.embr"
         (cd "$work" && EMBR_PATH="$work" "$embr" "c_$lib.embr" 2>&1 | grep -a -v '^\[runtime\]') > "$work/out_$lib.txt"
