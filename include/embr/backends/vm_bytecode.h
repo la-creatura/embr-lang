@@ -45,6 +45,10 @@ inline uint64_t fnv1a(const void* data, size_t n, uint64_t h = 14695981039346656
 }
 using vmbr::blockHash;
 inline uint64_t hashSource(const std::string& src) { return blockHash(src.data(), src.size()); }
+// a script with `const import` is made of more than its own text: the hash covers the files it reads, so a cached compile is not used after one changes
+inline uint64_t hashSource(const std::string& src, const std::string& file) {
+    return hashSource(src) + embr::includeDigest(src, dirOfFile(file));
+}
 
 // changes whenever an op is added, removed, renamed or reordered, so a file from another op set is refused
 inline uint64_t opSetFingerprint() {
@@ -510,7 +514,7 @@ inline CompiledProgram compileSourcePreferCached(const std::string& src, Interpr
                                                  const std::string& filename, const std::string& cacheDir,
                                                  const CompileOptions& copts) {
     if (cacheDir.empty()) return compileSource(src, interp, filename, copts);
-    const uint64_t h = hashSource(src);
+    const uint64_t h = hashSource(src, filename);
     const std::string path = (fs_::path(cacheDir) / cacheFileName(filename)).string();
     if (auto cached = readCompiledFile(path, h, filename)) {
         interp.setSource(src, filename);          // what compileSource() does besides compiling
@@ -544,7 +548,7 @@ inline size_t cleanCache(const std::string& cacheDir, bool removeAll = false) {
                     CompiledProgram prog = deserializeProgram(*bytes, "", &hdr);   // whole file: also catches damage, not just old headers
                     releaseProgram(prog);
                     auto src = readWholeFile(hdr.sourcePath);
-                    drop = !src || hashSource(*src) != hdr.sourceHash;
+                    drop = !src || hashSource(*src, hdr.sourcePath) != hdr.sourceHash;
                 } catch (const EmbrError&) { drop = true; }
             }
         }

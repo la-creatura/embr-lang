@@ -20,12 +20,8 @@
 
 namespace embr {
 
-// a type the way a script writes it: `int`, `str|arr`, `arr<int>`
-inline std::string typeText(TypeSet t, const TypeElem& el) {
-    std::string out = typecheck::detail::tn(t);
-    if (el && (out == "arr" || out == "map")) out += "<" + typeText(el->t, el->el) + ">";
-    return out;
-}
+// a type the way a script writes it: `int`, `str|arr`, `arr<int>`, `fn(int) -> int`
+inline std::string typeText(TypeSet t, const TypeElem& el) { return typecheck::detail::tyName(t, el); }
 
 inline std::string paramText(const Param& p) {
     std::string out = p.variadic ? "..." : p.inout ? "&" : "";

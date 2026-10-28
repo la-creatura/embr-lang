@@ -708,21 +708,26 @@ public:
     };
     Budget                    budget;
     uint64_t                  stepsUsed = 0;
+    // set by a plugin (parallel's worker_cancel) from another thread. the VM looks at it where it counts steps and
+    // then ends the run like a limit does. null: nothing can cancel this interpreter
+    std::shared_ptr<std::atomic<bool>> cancelFlag;
+    void setCancelFlag(std::shared_ptr<std::atomic<bool>> f) { cancelFlag = std::move(f); budgetOn = budget.on() || cancelFlag; }
     void setBudget(uint64_t maxSteps, double seconds) {
         budget.maxSteps = maxSteps;
         budget.seconds = seconds;
         if (seconds > 0)
             budget.deadline = std::chrono::steady_clock::now() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds));
         stepsUsed = 0;
-        budgetOn = budget.on();
+        budgetOn = budget.on() || cancelFlag;
     }
-    void setBudget(const Budget& b) { budget = b; stepsUsed = 0; budgetOn = b.on(); }   // keeps the other one's deadline
+    void setBudget(const Budget& b) { budget = b; stepsUsed = 0; budgetOn = b.on() || cancelFlag; }   // keeps the other one's deadline
     bool budgetOn = false;   // the VM tests this one flag on every loop turn and call
     // where compiled modules are kept as .vmbr files (see backends/vm_bytecode.h). empty: never write one
     std::string               cacheDir;
     // the files of the plugins this interpreter has registered, so importing one twice (a script and a module, or the
     // checker reading signatures before the script runs) registers it once
     std::unordered_set<std::string> loadedPlugins_;
+    std::unordered_set<std::string> loadedPluginNames_;   // import names that loaded, so a module in another folder does not search again
     PluginPolicy              pluginPolicy;       // see PluginPolicy
     // arguments after a bare `--` on the embr command line (embr script.embr -- a b c);
     // read by the os plugin's os_args()

@@ -13,6 +13,7 @@
 //   - an untyped parameter of a function that is only ever called by name inside this file takes the types of those
 //     calls. a function anything else could call (a top-level one in a module, or one passed around) stays `any`.
 //   - names it cannot see (plugins, other files, globals made elsewhere) are `any`.
+//   - a tool that wants the type of every expression sets Options::typesOut and reads one ExprType per Expr after the check.
 //   - see the wiki, type-system.
 
 #ifndef EMBR_CORE_TYPECHECK_H
@@ -44,10 +45,21 @@ struct ExportedName {
 };
 using ModuleExports = std::unordered_map<std::string, ExportedName>;
 
+// what the checker settled on for one expression, for tools that need the type of every expression (aembr, typed opcodes).
+// `sure`: one core type and not soft, the same test as AssignStmt::storeProven
+struct ExprType {
+    TypeSet  t = TypeSet::Any();
+    TypeElem el;                       // what the elements are, for an array or a map
+    bool     sure = false;
+};
+using ExprTypes = std::unordered_map<const Expr*, ExprType>;
+
 struct Options {
     // this file is the whole program: no other file will call its top-level functions. the `embr` command sets it
     // for the script you run, and only when the file imports no script module and starts no worker
     bool closedWorld = false;
+    // this file is an imported script module: the importer's variables are not its own, so a plain assignment in one of its functions never means one of them
+    bool isModule = false;
     const SourceMap* source = nullptr;   // for the source line in an error
     // the interpreter the file will run in. names it already has are known: a global with a recorded type (made by an
     // earlier file or REPL line), and natives with a signature (plugins imported so far). null: none are
@@ -57,6 +69,8 @@ struct Options {
     std::function<const ModuleExports*(const std::string&)> importModule;
     // filled in with every name this file makes at its top level
     ModuleExports* exportsOut = nullptr;
+    // filled in with the type of every expression. null (the default): nothing is recorded and the tree and the errors are the same
+    ExprTypes* typesOut = nullptr;
 };
 
 namespace detail {
@@ -107,6 +121,10 @@ struct Ty {
 };
 inline bool hasContainer(TypeSet t) { return (t.mask & (kBitArr | kBitMap)) != 0; }
 inline TypeElem makeElem(TypeSet t, TypeElem el) { auto a = std::make_shared<TypeAnn>(); a->t = t; a->el = std::move(el); return a; }
+// what a value of the type annotated `a` carries in its el slot: a function type its signature, a container its element type
+inline TypeElem detail(const TypeElem& a) { return a ? (a->isFn ? a : a->el) : nullptr; }
+// a function type is not carried by a variable that only got it from its first value: a later assignment may be a function of another arity
+inline TypeElem noSig(const TypeElem& a) { return (a && a->isFn) ? nullptr : a; }
 // the join of two element types (the element type of a container that holds either)
 inline TypeElem joinElem(const TypeElem& a, const TypeElem& b) {
     if (!a || !b) return nullptr;
@@ -123,23 +141,44 @@ inline Ty joinTy(const Ty& a, const Ty& b) {
 // the type of one element of `c`, any when it is not known
 inline Ty elemOf(const Ty& c) {
     if (!c.el) return Ty(kAny);
-    return Ty(c.el->t, c.el->el, true);
+    return Ty(c.el->t, detail(c.el), true);
 }
 inline bool singleContainer(TypeSet t) { return t.mask == kBitArr || t.mask == kBitMap; }
 // two element types that can never both be right
+inline bool elemsDiffer(const TypeElem& a, const TypeElem& b);
+// two function types that can never both be right: another number of parameters, or a parameter or result of types with nothing in common
+inline bool fnSigsDiffer(const TypeAnn& a, const TypeAnn& b) {
+    if (a.params.size() != b.params.size()) return true;
+    for (size_t i = 0; i < a.params.size(); ++i) if (elemsDiffer(a.params[i], b.params[i])) return true;
+    return elemsDiffer(a.ret, b.ret);      // a result that is not written is not checked
+}
 inline bool elemsDiffer(const TypeElem& a, const TypeElem& b) {
     if (!a || !b) return false;
     if (disjoint(a->t, b->t)) return true;
+    if (a->isFn && b->isFn) return fnSigsDiffer(*a, *b);
     return singleContainer(a->t) && a->t.mask == b->t.mask && elemsDiffer(a->el, b->el);
 }
 // a value of type `got` can never be used where `want` is wanted
 inline bool differ(const Ty& want, const Ty& got) {
     if (disjoint(want.t, got.t)) return true;
+    // (a native that takes `fn|ptr` and says what the function takes is checked against a function; a pointer is not)
+    if ((want.t.mask & kBitFn) && got.t.mask == kBitFn && want.el && got.el && want.el->isFn && got.el->isFn) return fnSigsDiffer(*want.el, *got.el);
     return singleContainer(want.t) && want.t.mask == got.t.mask && elemsDiffer(want.el, got.el);
 }
+inline std::string tyName(const TypeSet& t, const TypeElem& el);
+inline std::string annName(const TypeElem& a) { return a ? tyName(a->t, detail(a)) : "any"; }
 inline std::string tyName(const TypeSet& t, const TypeElem& el) {
     std::string n = tn(t);
-    if (singleContainer(t) && el) n += "<" + tyName(el->t, el->el) + ">";
+    if (el && el->isFn && (t.mask & kBitFn)) {
+        if (t.mask != kBitFn) n = "fn";       // (a native that also takes a pointer: say what the function is)
+        n += "(";
+        for (size_t i = 0; i < el->params.size(); ++i) n += (i ? ", " : "") + annName(el->params[i]);
+        n += ")";
+        if (el->ret) n += " -> " + annName(el->ret);
+        if (t.mask != kBitFn) n += " (or a pointer)";
+    } else if (singleContainer(t) && el) {
+        n += "<" + annName(el) + ">";
+    }
     return n;
 }
 inline std::string tyName(const Ty& t) { return tyName(t.t, t.el); }
@@ -156,6 +195,7 @@ struct Var {
     bool    declared = false;   // the type was written in the source
     bool    isConst = false;    // made by `const name = ...`: no assignment may follow
     int     fn     = 0;         // the function that owns it, 0 for the top level
+    int     declFn = 0;         // a function declared with `fn name(...)`: its id plus one, so its signature can be read when it is used as a value
 };
 
 struct FnInfo {
@@ -408,7 +448,7 @@ private:
             if (it != scopes_[i].vars.end()) return &it->second;
         }
         // a global an earlier file or REPL line made, with the type it was given
-        if (opt_.interp) {
+        if (opt_.interp && !opt_.isModule) {
             if (const TypeSet* rec = opt_.interp->recordedType(n)) {
                 Var v; v.type = *rec; v.hint = *rec; v.declared = true; v.fn = 0;
                 if (const TypeElem* e = opt_.interp->staticElem(n)) v.el = *e;
@@ -498,7 +538,7 @@ private:
                 auto* f = static_cast<const FnStmt*>(s);
                 int id = fnOfStmt_[f];
                 FnInfo& info = fns_[(size_t)id];
-                Var fv; fv.type = kFn; fv.declared = true; fv.fn = curFn_;
+                Var fv; fv.type = kFn; fv.declared = true; fv.fn = curFn_; fv.declFn = id + 1;
                 scopes_.back().vars[f->name] = fv;
                 function(f->params, &info.params, f->body, id, info.declRet.t, info.hasDeclRet);
                 break;
@@ -589,11 +629,11 @@ private:
             if (a->target->kind == Expr::Kind::Index) {
                 o = exprTy(static_cast<const IndexExpr*>(a->target.get())->object.get());
                 known = singleContainer(o.t) && o.el && !isProtoKey(static_cast<const IndexExpr*>(a->target.get())->index.get());
-                if (known) wantEl = Ty(o.el->t, o.el->el);
+                if (known) wantEl = Ty(o.el->t, detail(o.el));
             }
             Ty t = exprTy(a->value.get(), known && wantEl.el ? &wantEl : nullptr);
             if (known && differ(wantEl, t))
-                error(a->value->range, "cannot put " + tyName(t) + " into " + tyName(o) + ", whose elements are " + tyName(o.el->t, o.el->el));
+                error(a->value->range, "cannot put " + tyName(t) + " into " + tyName(o) + ", whose elements are " + tyName(o.el->t, detail(o.el)));
             return;
         }
         const std::string& name = static_cast<const VarExpr*>(a->target.get())->name;
@@ -604,7 +644,7 @@ private:
         const bool valueBad = errors_.size() != errsBefore;   // the literal already said what is wrong with it
         v = lookup(name);
         if (!v || v->late) {          // the first assignment makes the variable, and fixes its type
-            Var nv; nv.fn = curFn_; nv.type = t.t; nv.el = t.el; nv.soft = t.soft; nv.isConst = a->isConst;
+            Var nv; nv.fn = curFn_; nv.type = t.t; nv.el = noSig(t.el); nv.soft = t.soft; nv.isConst = a->isConst;
             const bool sure = singleTag(t.t) && !t.soft;
             nv.hint = sure ? t.t : kAny;
             a->storeHint = nv.hint; a->storeProven = sure;
@@ -645,7 +685,7 @@ private:
             } else {
                 const Ty each = (!single && t.t.mask == kBitArr) ? elemOf(t) : Ty(kAny);   // unpacking an array gives its elements
                 v.type = single ? t.t : each.t;
-                v.el = single ? t.el : each.el;
+                v.el = noSig(single ? t.el : each.el);
                 v.soft = single ? t.soft : each.soft;
                 v.hint = (single && singleTag(t.t) && !t.soft) ? t.t : kAny;
                 if (single) l->inferredHint = v.hint;
@@ -659,13 +699,22 @@ private:
     TypeSet expr(const Expr* e) { return exprTy(e).t; }
     // want: what the context asks for, when it is an array or a map with a known element type. a literal then checks each of its elements
     Ty exprTy(const Expr* e, const Ty* want = nullptr) {
+        Ty r = exprTyImpl(e, want);
+        // only the last, reporting pass: its types are the settled ones
+        if (report_ && opt_.typesOut) (*opt_.typesOut)[e] = ExprType{r.t, r.el, singleTag(r.t) && !r.soft};
+        return r;
+    }
+    Ty exprTyImpl(const Expr* e, const Ty* want) {
         switch (e->kind) {
             case Expr::Kind::Number: return Ty(kFloat);
             case Expr::Kind::Int:    return Ty(kInt);
             case Expr::Kind::String: return Ty(kStr);
             case Expr::Kind::Var: {
                 const std::string& n = static_cast<const VarExpr*>(e)->name;
-                if (Var* v = lookup(n)) return Ty(v->type, v->el, v->soft);
+                if (Var* v = lookup(n)) {
+                    if (v->declFn && v->type.mask == kBitFn && !v->el) { const FnStmt* d = fns_[(size_t)v->declFn - 1].decl; return fnSigTy(d->params, d->returnType, d->returnElem); }
+                    return Ty(v->type, v->el, v->soft);
+                }
                 return Ty(kAny);
             }
             case Expr::Kind::Array: {
@@ -673,11 +722,11 @@ private:
                 static const char* const what[] = {"start", "second number", "end"};
                 Ty acc(TypeSet(0));
                 const bool checkEls = want && !a->isRange && want->t.mask == kBitArr && want->el;
-                const Ty wantEl = checkEls ? Ty(want->el->t, want->el->el) : Ty(kAny);
+                const Ty wantEl = checkEls ? Ty(want->el->t, detail(want->el)) : Ty(kAny);
                 for (size_t i = 0; i < a->elements.size(); ++i) {
                     Ty et = exprTy(a->elements[i].get(), checkEls ? &wantEl : nullptr);
                     if (checkEls && differ(wantEl, et))
-                        error(a->elements[i]->range, "cannot put " + tyName(et) + " into " + tyName(want->t, want->el) + ", whose elements are " + tyName(want->el->t, want->el->el));
+                        error(a->elements[i]->range, "cannot put " + tyName(et) + " into " + tyName(want->t, want->el) + ", whose elements are " + tyName(want->el->t, detail(want->el)));
                     acc = joinTy(acc, et);
                     // the numbers of a range have to be numbers
                     if (a->isRange && notNumeric(et.t))
@@ -691,7 +740,7 @@ private:
                 Ty acc(TypeSet(0));
                 const auto& entries = static_cast<const MapExpr*>(e)->entries;
                 const bool checkEls = want && want->t.mask == kBitMap && want->el;
-                const Ty wantEl = checkEls ? Ty(want->el->t, want->el->el) : Ty(kAny);
+                const Ty wantEl = checkEls ? Ty(want->el->t, detail(want->el)) : Ty(kAny);
                 for (auto& kv : entries) {
                     expr(kv.first.get());
                     // `__proto__` is the map's prototype, not one of its values
@@ -699,7 +748,7 @@ private:
                     Ty vt = exprTy(kv.second.get(), checkEls && !proto ? &wantEl : nullptr);
                     if (proto) continue;
                     if (checkEls && differ(wantEl, vt))
-                        error(kv.second->range, "cannot put " + tyName(vt) + " into " + tyName(want->t, want->el) + ", whose elements are " + tyName(want->el->t, want->el->el));
+                        error(kv.second->range, "cannot put " + tyName(vt) + " into " + tyName(want->t, want->el) + ", whose elements are " + tyName(want->el->t, detail(want->el)));
                     acc = joinTy(acc, vt);
                 }
                 return entries.empty() ? Ty(kMap) : Ty(kMap, makeElem(acc.t, acc.el));
@@ -707,7 +756,7 @@ private:
             case Expr::Kind::Lambda: {
                 auto* l = static_cast<const LambdaExpr*>(e);
                 function(l->params, nullptr, l->ownedBody, 0, l->returnType, false);
-                return Ty(kFn);
+                return fnSigTy(l->params, l->returnType, l->returnElem);
             }
             case Expr::Kind::Ref: return exprTy(static_cast<const RefExpr*>(e)->target.get());   // `&a` is a, handed over to be changed
             case Expr::Kind::And: case Expr::Kind::Or: {
@@ -789,6 +838,33 @@ private:
         return Ty(kAny);
     }
 
+    // the function type a lambda or a declared function has, from the types written in its parameters and result. a function with an optional
+    // or rest parameter takes more than one number of arguments, so it gets no signature
+    Ty fnSigTy(const std::vector<Param>& ps, TypeSet ret, const TypeElem& retEl) {
+        auto a = std::make_shared<TypeAnn>();
+        a->t = kFn; a->isFn = true;
+        for (const Param& p : ps) {
+            if (p.optional || p.variadic) return Ty(kFn);
+            a->params.push_back(p.explicitType ? makeAnn(p.type, p.elem) : makeAnn(kAny, nullptr));
+        }
+        if (!ret.isAny() || retEl) a->ret = makeAnn(ret, retEl);
+        return Ty(kFn, a);
+    }
+    static std::string count(size_t n) { return std::to_string(n) + (n == 1 ? " argument" : " arguments"); }
+    // a call of something that holds a function with a written type: the arguments have to fit it, and the result is what it says
+    Ty callTyped(const CallExpr* c, const std::string& what, const TypeAnn& sig, const std::vector<Ty>& argTys, const std::vector<bool>& argBad) {
+        if (c->args.size() != sig.params.size()) {
+            error(c->range, what + " is a " + tyName(kFn, std::make_shared<TypeAnn>(sig)) + ", which takes " + count(sig.params.size()) + ", not " + std::to_string(c->args.size()));
+        } else {
+            for (size_t i = 0; i < c->args.size(); ++i) {
+                const TypeElem& pt = sig.params[i];
+                if (!(i < argBad.size() && argBad[i]) && differ(Ty(pt->t, detail(pt)), argTys[i]))
+                    error(c->args[i]->range, "argument " + std::to_string(i + 1) + " to " + what + ": expected " + annName(pt) + " but got " + tyName(argTys[i]));
+            }
+        }
+        return sig.ret ? Ty(sig.ret->t, detail(sig.ret)) : Ty(kAny);
+    }
+
     Ty call(const CallExpr* c) {
         std::vector<bool> argBad;
         std::vector<TypeSet> args;
@@ -822,8 +898,10 @@ private:
             argBad.resize(argTys.size()); argBad[i] = errors_.size() != before;   // already said what is wrong with it
         }
         if (c->callee->kind != Expr::Kind::Var) {
-            TypeSet ct = expr(c->callee.get());
+            Ty cty = exprTy(c->callee.get());
+            TypeSet ct = cty.t;
             if (notCallable(ct)) error(c->range, "cannot call " + tn(ct));
+            if (ct.mask == kBitFn && cty.el && cty.el->isFn) return callTyped(c, "this function", *cty.el, argTys, argBad);
             return Ty(kAny);
         }
         const std::string& name = static_cast<const VarExpr*>(c->callee.get())->name;
@@ -834,6 +912,7 @@ private:
             return Ty(overloadCall(c, name, args));
         if (fi == fnByName_.end()) {
             if (v && notCallable(v->type)) error(c->range, "cannot call '" + name + "', which holds " + tn(v->type));
+            if (v && v->type.mask == kBitFn && v->el && v->el->isFn) return callTyped(c, "'" + name + "'", *v->el, argTys, argBad);
             if (v) { auto im = importedFn_.find(name); if (im != importedFn_.end()) return Ty(im->second.first, im->second.second); }
             // a native this interpreter already has, with a signature, and a name the file never binds itself
             if (!v && opt_.interp && bindings_[name] == 0) {
@@ -855,8 +934,10 @@ private:
         const auto& ps = f.decl->params;
         const bool variadic = !ps.empty() && ps.back().variadic;
         const size_t fixed = variadic ? ps.size() - 1 : ps.size();
-        if (args.size() < fixed)
-            error(c->range, "'" + name + "' expects " + (variadic ? "at least " : "") + std::to_string(fixed) +
+        size_t required = 0;                                  // a parameter with a default value may be left out (aembr)
+        for (size_t i = 0; i < fixed; ++i) if (!ps[i].optional) required = i + 1;
+        if (args.size() < required)
+            error(c->range, "'" + name + "' expects " + (variadic || required < fixed ? "at least " : "") + std::to_string(required) +
                   " args, got " + std::to_string(args.size()));
         f.called = true;
         for (size_t i = 0; i < fixed && i < args.size(); ++i) {
@@ -895,8 +976,8 @@ private:
             // an argument that has to fit what another one holds: `push(list, x)` with list an arr<int> takes an int
             if (p->elemOf >= 0 && (size_t)p->elemOf < args.size()) {
                 const Ty& holder = args[(size_t)p->elemOf];
-                if (singleContainer(holder.t) && holder.el && differ(Ty(holder.el->t, holder.el->el), args[i]))
-                    error(c->args[i]->range, "argument '" + p->name + "' to '" + name + "': the " + tyName(holder) + " holds " + tyName(holder.el->t, holder.el->el) +
+                if (singleContainer(holder.t) && holder.el && differ(Ty(holder.el->t, detail(holder.el)), args[i]))
+                    error(c->args[i]->range, "argument '" + p->name + "' to '" + name + "': the " + tyName(holder) + " holds " + tyName(holder.el->t, detail(holder.el)) +
                           ", not " + tyName(args[i]));
                 continue;
             }

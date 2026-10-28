@@ -18,6 +18,10 @@ print(hc_loads())
 print(hc_upper("héllo wörld"))
 print(hc_show([1, "a", 2.5, {"k": 2}]))
 print(hc_show(2.50), hc_show(-7), hc_show("txt"))
+print(hc_sum([1, 2, 3, 4]), hc_sum([]), hc_sum([5...100]))
+sq = hc_squares(6)
+print(sq, len(sq))
+print(len(hc_squares(100000)))
 
 # an error from C is an ordinary error a script can catch
 try
@@ -35,4 +39,20 @@ try
     hc_counter_get(hc_counter)
 catch e
     print("caught a wrong handle")
+end
+# a kind of its own, and the label of the function when there is none
+try
+    hc_fail_kind("mykind", "with a kind")
+catch e
+    print("caught:", e["kind"], e["message"])
+end
+try
+    hc_sum([1, "x"])
+catch e
+    print("caught:", e["kind"], e["message"])
+end
+try
+    hc_fail("plain")
+catch e
+    print("caught:", e["kind"])
 end

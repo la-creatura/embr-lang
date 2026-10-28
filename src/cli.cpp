@@ -489,6 +489,7 @@ static std::vector<embr::EmbrError> diagnose(const std::string& src, const std::
         embr::Lexer lex(src);
         auto tokens = lex.tokenize();
         embr::SourceMap sm = lex.sourceMap();
+        sm.setBaseDir(embr::dirOfFile(path));
         embr::Parser parser(std::move(tokens), sm);
         parser.collectErrors(&errors);
         auto prog = parser.parse();
@@ -1153,6 +1154,7 @@ static void runTestFile(const fs::path& file, const std::string& filter, TestTot
         embr::Lexer lex(src);
         auto tokens = lex.tokenize();
         embr::SourceMap sm = lex.sourceMap();
+        sm.setBaseDir(file.parent_path().string());
         std::vector<embr::EmbrError> perr;
         embr::Parser parser(std::move(tokens), sm);
         parser.collectErrors(&perr);

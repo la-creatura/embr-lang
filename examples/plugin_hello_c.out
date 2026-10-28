@@ -9,6 +9,12 @@ x,y
 HéLLO WöRLD
 [1, "a", 2.5, {k: 2}]
 2.5 -7 txt
+10 0 5040
+[0, 1, 4, 9, 16, 25] 6
+100000
 caught: nope
 caught: hc_join: every element must be a string
 caught a wrong handle
+caught: mykind with a kind
+caught: value hc_sum: every element must be an int
+caught: hc_fail

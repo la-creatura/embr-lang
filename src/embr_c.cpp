@@ -45,7 +45,9 @@ int run(embr_state* e, const std::string& src, const std::string& filename) {
         if (!e->runner) e->runner = std::make_unique<embr::vm::VmRunner>(e->interp);
         {   // the parser recovers from a mistake and goes on, so it is asked for its errors first: the first one stops the run
             embr::Lexer lex(src);
-            embr::Parser parser(lex.tokenize(), lex.sourceMap());
+            embr::SourceMap sm = lex.sourceMap();
+            sm.setBaseDir(embr::dirOfFile(filename));
+            embr::Parser parser(lex.tokenize(), sm);
             std::vector<embr::EmbrError> errors;
             parser.collectErrors(&errors);
             parser.parse();

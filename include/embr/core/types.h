@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <memory>
 
 namespace embr {
@@ -89,7 +90,31 @@ namespace TS {
 // only the static checker (typecheck.h) looks at it: at run time an array is an array
 struct TypeAnn;
 using TypeElem = std::shared_ptr<const TypeAnn>;
-struct TypeAnn { TypeSet t = TypeSet::Any(); TypeElem el; };
+// a function type, `fn(int, str) -> int`, is a TypeAnn too: `isFn`, the parameter types and the result (null when none is written, then the
+// result is not checked). a parameter, a result, a `local` or an array element of a function type carries it in its TypeElem slot, where an
+// array carries its element type
+struct TypeAnn {
+    TypeSet  t = TypeSet::Any();
+    bool     isHost = false;    // `host`: the host's own value, not copied (the type is any for the checker). a parameter or a result of an aembr plugin function; the VM refuses it
+    TypeElem el;
+    bool                  isFn = false;
+    std::vector<TypeElem> params;
+    TypeElem              ret;
+};
+// the annotation of a type that was parsed to `ts` with details `sub`: for a function type that is the signature itself
+inline TypeElem makeAnn(TypeSet ts, TypeElem sub) {
+    if (sub && sub->isFn && ts.mask == TS::Fn.mask) return sub;
+    auto a = std::make_shared<TypeAnn>(); a->t = ts; a->el = std::move(sub);
+    return a;
+}
+
+// the literal an optional parameter of a script function has when the caller leaves it out. only aembr (the compiler) runs these, see the wiki's syntax page
+struct ParamDefault {
+    enum Kind { None, Int, Float, Str } kind = None;
+    int64_t     i = 0;
+    double      f = 0.0;
+    std::string s;
+};
 
 struct Param {
     std::string name;
@@ -105,6 +130,8 @@ struct Param {
     TypeElem    elem = nullptr;
     // a native: this argument has to fit what the array (or map) passed as argument number `elemOf` holds. `push(&list, x)` is req/io list, then x with elemOf 0
     int         elemOf = -1;
+    // a script function's optional parameter (`b: int = 5`, only after the required ones): what it is when the call leaves it out. `optional` is true too
+    ParamDefault def = {};
 
     static Param req (std::string nm, TypeSet t = TypeSet::Any()) { return {std::move(nm), t, false, false}; }
     static Param opt (std::string nm, TypeSet t = TypeSet::Any()) { return {std::move(nm), t, true,  false}; }

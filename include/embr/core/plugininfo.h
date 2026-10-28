@@ -27,7 +27,7 @@
 
 namespace embr {
 
-inline constexpr int kCxxAbiVersion = 1;
+inline constexpr int kCxxAbiVersion = 2;
 
 #define EMBR_PI_STR2(x) #x
 #define EMBR_PI_STR(x) EMBR_PI_STR2(x)

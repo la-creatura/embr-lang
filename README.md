@@ -156,7 +156,15 @@ on linux, one line installs the latest release for you (no sudo, it goes in your
 ```bash
 curl -fsSL https://raw.githubusercontent.com/la-creatura/embr-lang/main/install.sh | sh
 ```
-you get an `embr` command, `EMBR_PATH` set up (it points at `~/.local/share/embr/extra`, put your own plugins and modules there), a menu entry, and icons and double-click for `.embr`, `.vmbr` and `.pmbr` files. `~/.local/share/embr/uninstall.sh` takes all of it out again. `--system` installs for everyone, `--version X.Y.Z` picks a release, `--no-modify-path` and `--no-desktop` skip those parts. the [installing](https://github.com/la-creatura/embr-lang/wiki/installing) page has the details.
+you get an `embr` command, an `aembr` command (the compiler, it needs a C compiler on your machine), `EMBR_PATH` set up (it points at `~/.local/share/embr/extra`, put your own plugins and modules there), a menu entry, and icons and double-click for `.embr`, `.vmbr` and `.pmbr` files. `~/.local/share/embr/uninstall.sh` takes all of it out again. `--system` installs for everyone, `--version X.Y.Z` picks a release, `--no-modify-path`, `--no-desktop` and `--no-aembr` skip those parts. the [installing](https://github.com/la-creatura/embr-lang/wiki/installing) page has the details.
+
+on windows (64 bit), one line in powershell does the same for your user, no admin needed:
+
+```powershell
+irm https://raw.githubusercontent.com/la-creatura/embr-lang/main/install.ps1 | iex
+```
+
+it sets up the `embr` command, `EMBR_PATH` and the icons for `.embr`, `.vmbr` and `.pmbr` files. `%LOCALAPPDATA%\embr\uninstall.ps1` removes it again. `-Version X.Y.Z`, `-NoModifyPath` and `-NoFileTypes` work like the linux options.
 
 or by hand, from the tarball or a build:
 ```bash

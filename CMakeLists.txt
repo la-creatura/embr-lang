@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(embr VERSION 1.0.0 LANGUAGES CXX)
+project(embr VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -175,6 +175,13 @@ add_subdirectory(plugins)
 add_subdirectory(modules)
 add_subdirectory(examples)
 
+# aembr, the compiler to native programs (tools/aembr/DESIGN.md). needs a C compiler on the machine that uses it, not to build it
+option(EMBR_AEMBR "build aembr" ON)
+if(EMBR_AEMBR AND UNIX)
+    enable_language(C)
+    add_subdirectory(tools/aembr)
+endif()
+
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
@@ -208,6 +215,11 @@ if(UNIX AND NOT APPLE)
         endif()
         install(FILES ${icon_file} DESTINATION ${icon_dir}/scalable/mimetypes RENAME ${icon_name}.svg)
     endforeach()
+endif()
+
+# the windows installer takes its uninstaller out of the zip too
+if(WIN32)
+    install(PROGRAMS uninstall.ps1 DESTINATION share/embr)
 endif()
 
 # cmake --build <build dir> --target package     makes embr-<version>-<os>-<arch>.tar.gz

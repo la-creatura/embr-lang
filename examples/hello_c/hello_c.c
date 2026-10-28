@@ -14,6 +14,8 @@
  *   print(hc_loads())                    # 1  (init ran once for this import)
  *   print(hc_upper("héllo"))             # HéLLO  (writes the result string in place)
  *   print(hc_show([1, "a", 2.5]))        # [1, a, 2.5]  (any value as text, the way print() shows it)
+ *   print(hc_sum([1, 2, 3]))             # 6  (reads the array in one call, embrp_array_data)
+ *   print(hc_squares(4))                 # [0, 1, 4, 9]  (writes the numbers in one call, embrp_array_push_ints)
  *
  * good to know
  *   - the plugin is a table (embr_plugin_info). embr reads it and binds the functions, nothing runs at load
@@ -144,6 +146,53 @@ static int hc_show(EmbrCtx* ctx, const EmbrValue* args, size_t n, EmbrValue* out
     return embrp_set_str(ctx, out, s, len);
 }
 
+/* hc_sum(list: arr) -> int, the sum of the ints. a host built before embrp_array_data has a smaller table, so ask first and read one element
+   at a time when the call is not there */
+static int hc_sum(EmbrCtx* ctx, const EmbrValue* args, size_t n, EmbrValue* out) {
+    size_t count, i;
+    int64_t sum = 0;
+    (void)n;
+    if (embrp_has_bulk(ctx)) {
+        const EmbrValue* d = embrp_array_data(ctx, &args[0], &count);
+        for (i = 0; i < count; ++i) {
+            if (d[i].tag != EMBR_TAG_INT) return embrp_fail_kind(ctx, "value", "hc_sum: every element must be an int");
+            sum += d[i].u.i;
+        }
+    } else {
+        count = embrp_array_len(ctx, &args[0]);
+        for (i = 0; i < count; ++i) {
+            const EmbrValue* e = embrp_array_at(ctx, &args[0], i);
+            if (embrp_type(ctx, e) != EMBR_TAG_INT) return embrp_fail(ctx, "hc_sum: every element must be an int");
+            sum += embrp_to_int(ctx, e);
+        }
+    }
+    return embrp_set_int(ctx, out, sum);
+}
+
+/* hc_squares(n: int) -> arr of int, 0, 1, 4, ... written with one call (or one each on an older host) */
+static int hc_squares(EmbrCtx* ctx, const EmbrValue* args, size_t n, EmbrValue* out) {
+    int64_t count = embrp_to_int(ctx, &args[0]), i;
+    int64_t* xs;
+    int rc;
+    (void)n;
+    if (count < 0 || count > 1000000) return embrp_fail(ctx, "hc_squares: n has to be 0 to 1000000");
+    if (embrp_set_array(ctx, out, (size_t)count)) return 1;
+    if (!count) return 0;
+    xs = malloc((size_t)count * sizeof *xs);
+    if (!xs) return embrp_fail(ctx, "hc_squares: out of memory");
+    for (i = 0; i < count; ++i) xs[i] = i * i;
+    if (embrp_has_bulk(ctx)) rc = embrp_array_push_ints(ctx, out, xs, (size_t)count);
+    else { rc = 0; for (i = 0; i < count && !rc; ++i) rc = embrp_array_push_int(ctx, out, xs[i]); }
+    free(xs);
+    return rc;
+}
+
+/* hc_fail_kind(kind: str, message: str): raises an error with a kind of its own, so e["kind"] is not "[hello_c:hc_fail_kind]" */
+static int hc_fail_kind(EmbrCtx* ctx, const EmbrValue* args, size_t n, EmbrValue* out) {
+    (void)n; (void)out;
+    return embrp_fail_kind(ctx, embrp_str(ctx, &args[0], NULL), embrp_str(ctx, &args[1], NULL));
+}
+
 /* hc_fail(msg: str): always raises, shows the error path */
 static int hc_fail(EmbrCtx* ctx, const EmbrValue* args, size_t n, EmbrValue* out) {
     (void)n; (void)out;
@@ -158,6 +207,8 @@ static const EmbrParam p_msg[]     = { { "message", EMBR_T_STRING, 0 } };
 static const EmbrParam p_str[]     = { { "s", EMBR_T_STRING, 0 } };
 static const EmbrParam p_any[]     = { { "v", EMBR_T_ANY, 0 } };
 static const EmbrParam p_list[]    = { { "list", EMBR_T_ARRAY | EMBR_T_POINTER, 0 } };
+static const EmbrParam p_arr[]     = { { "list", EMBR_T_ARRAY, 0 } };
+static const EmbrParam p_kindmsg[] = { { "kind", EMBR_T_STRING, 0 }, { "message", EMBR_T_STRING, 0 } };
 
 static const EmbrFunc funcs[] = {
     { "hc_twice",       "hc_twice(n: int) -> int, doubles n",                         hc_twice,       NULL, p_n,       1, EMBR_T_INT,     EMBR_FUNC_PURE, 0 },
@@ -171,6 +222,9 @@ static const EmbrFunc funcs[] = {
     { "hc_loads",       "hc_loads() -> int, how many times init ran",                 hc_loads,       NULL, NULL,      0, EMBR_T_INT,     0, 0 },
     { "hc_upper",       "hc_upper(s: str) -> str, ASCII letters uppercased, written in place",  hc_upper,       NULL, p_str,     1, EMBR_T_STRING,  EMBR_FUNC_PURE, 0 },
     { "hc_show",        "hc_show(v) -> str, any value as text",                        hc_show,        NULL, p_any,     1, EMBR_T_STRING,  EMBR_FUNC_PURE, 0 },
+    { "hc_sum",         "hc_sum(list: arr) -> int, the sum of the ints, read with one call", hc_sum,   NULL, p_arr,     1, EMBR_T_INT,     EMBR_FUNC_PURE, 0 },
+    { "hc_squares",     "hc_squares(n: int) -> arr of int, 0, 1, 4, ... written with one call", hc_squares, NULL, p_n,  1, EMBR_T_ARRAY,   EMBR_FUNC_PURE, EMBR_T_INT },
+    { "hc_fail_kind",   "hc_fail_kind(kind: str, message: str), raises an error with a kind of its own", hc_fail_kind, NULL, p_kindmsg, 2, EMBR_T_ANY, 0, 0 },
     { "hc_fail",        "hc_fail(message: str), raises an error with that message",   hc_fail,        NULL, p_msg,     1, EMBR_T_ANY,     0, 0 },
 };
 

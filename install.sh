@@ -1,6 +1,6 @@
 #!/bin/sh
 # install.sh
-# installs an embr release: the program, an `embr` command, EMBR_PATH, a menu entry, and the icons and file types
+# installs an embr release: the program, an `embr` command (and `aembr`, the compiler, when the release has it), EMBR_PATH, a menu entry, and the icons and file types
 # for .embr, .vmbr and .pmbr. uninstall.sh (it is copied next to the install) takes all of it out again.
 #
 # usage
@@ -13,8 +13,10 @@
 #   --system           install under /usr/local instead of your home folder
 #   --no-modify-path   leave your shell config alone, you set PATH and EMBR_PATH yourself
 #   --no-desktop       skip the menu entry, the icons and the file types
+#   --no-aembr         do not add the `aembr` command (the files stay in the install folder)
 #
 # good to know
+#   - aembr turns a typed part of embr into C and builds it, so it needs a C compiler (cc) on your machine.
 #   - linux only for now. on other systems build from source (see the readme).
 #   - everything it creates outside its own folder is listed in <data>/embr/manifest, which uninstall.sh reads.
 #   - EMBR_PATH points at <data>/embr/extra, a folder for your own plugins/ and modules/. uninstall keeps it
@@ -32,7 +34,7 @@ die() { printf 'embr: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
-usage: install.sh [--version X.Y.Z] [--from FILE] [--system] [--no-modify-path] [--no-desktop]
+usage: install.sh [--version X.Y.Z] [--from FILE] [--system] [--no-modify-path] [--no-desktop] [--no-aembr]
 see the top of this file for what each one does
 EOF
 }
@@ -42,6 +44,7 @@ from=
 system=0
 modify_path=1
 desktop=1
+aembr=1
 while [ $# -gt 0 ]; do
     case $1 in
         --version) [ $# -ge 2 ] || die "--version needs a number"; want=${2#v}; shift ;;
@@ -49,6 +52,7 @@ while [ $# -gt 0 ]; do
         --system) system=1 ;;
         --no-modify-path) modify_path=0 ;;
         --no-desktop) desktop=0 ;;
+        --no-aembr) aembr=0 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; die "unknown option: $1" ;;
     esac
@@ -150,13 +154,21 @@ ln -sfn "$ver" "$ehome/current"
 case $old in ''|"$ver"|*/*) ;; *) rm -rf "${ehome:?}/$old" ;; esac
 note dir "$ehome/$ver"
 
-# the command. never replace one that is not ours (a link you made to your own build, a distro package)
-if [ -e "$bin/embr" ] || [ -L "$bin/embr" ]; then
-    [ "$(readlink "$bin/embr" 2>/dev/null || true)" = "$ehome/current/bin/embr" ] ||
-        die "$bin/embr already exists and is not from this installer. remove it and run this again"
+# the commands. never replace one that is not ours (a link you made to your own build, a distro package)
+link_command() { # name
+    if [ -e "$bin/$1" ] || [ -L "$bin/$1" ]; then
+        [ "$(readlink "$bin/$1" 2>/dev/null || true)" = "$ehome/current/bin/$1" ] ||
+            die "$bin/$1 already exists and is not from this installer. remove it and run this again"
+    fi
+    ln -sfn "$ehome/current/bin/$1" "$bin/$1"
+    note file "$bin/$1"
+}
+link_command embr
+have_aembr=0
+if [ "$aembr" = 1 ] && [ -x "$ehome/current/bin/aembr" ]; then
+    link_command aembr
+    have_aembr=1
 fi
-ln -sfn "$ehome/current/bin/embr" "$bin/embr"
-note file "$bin/embr"
 
 # the launcher the menu entry uses, and the uninstaller
 cp "$ehome/current/share/embr/open.sh" "$ehome/open"
@@ -243,6 +255,9 @@ fi
 { echo "mode $([ "$system" = 1 ] && echo system || echo user)"; echo "data $data"; cat "$tmp/manifest"; } > "$ehome/manifest"
 
 say "done. installed embr $ver"
+if [ "$have_aembr" = 1 ] && ! have cc && ! have gcc && ! have clang; then
+    say "aembr is installed, but it needs a C compiler to build anything and none was found"
+fi
 if [ "$path_help" = 1 ]; then
     say "add these to your shell config yourself:"
     [ "$system" = 1 ] || say "  export PATH=\"$bin:\$PATH\""

@@ -37,7 +37,7 @@
 # but a plain binding is simpler. the double underscore is only a naming convention for "internal"
 
 __module__ = {
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "call C functions from C declarations, on top of the ffi and embrtypes plugins",
     "capabilities": ["native"],
 }
@@ -52,6 +52,9 @@ import "embrlib"
 # name -> embrtypes descriptor, for types ffi_cdef can't resolve on its own
 # (struct typedefs, or a plain alias for a primitive). populated by ffi_typedef().
 __ffi_typedefs = {}
+
+# name -> {ret, params} of a function pointer typedef, for ffi_callback_for(). populated by ffi_typedef_fn().
+__ffi_fnptrs = {}
 
 # ffi_typedef(name: str, desc: any) -> 0
 # registers desc (an embrtypes type descriptor, e.g. from struct_type() or
@@ -244,6 +247,31 @@ fn __ffi_install(sym, d)
     return 0
 end
 
+# ffi_typedef_fn(name: str, ret: str, params: arr of str) -> 0
+# registers a C function pointer type, `typedef ret (*name)(params)`, with the types written as C text. in a declaration
+# it is a plain ptr; ffi_callback_for(name, fn) makes a callback with the right result and argument types.
+# ffi_bind does this for every function pointer typedef of a header.
+fn ffi_typedef_fn(name, ret, params)
+    ffi_typedef(name, type_ptr())
+    __ffi_fnptrs[name] = {ret: ret, params: params}
+    return 0
+end
+
+# ffi_callback_for(name: str, f: fn) -> ptr<ffi.callback>
+# a C function pointer that calls f, typed by the function pointer typedef `name` (see ffi_typedef_fn). free it with
+# ffi_callback_free once C no longer holds it
+fn ffi_callback_for(name, f)
+    if !has(__ffi_fnptrs, name)
+        error("ffi_callback_for: '" + name + "' is not a function pointer type -- register it with ffi_typedef_fn")
+    end
+    sig = __ffi_fnptrs[name]
+    args = []
+    for t in sig["params"]
+        args = push(args, ffi_ctype(t))
+    end
+    return ffi_callback(f, __ffi_resolve_return(sig["ret"]), args)
+end
+
 # ffi_cdef(lib: ptr<ffi.lib>, decl: str) -> 0
 # parses decl as a single C function declaration, resolves its signature,
 # and installs a global function under its name that calls into lib via
@@ -309,7 +337,7 @@ fn ffi_bind(lib, header, ...rest)
             elif k == "enum"
                 ffi_typedef(t["name"], type_i32())
             elif k == "funcptr"
-                ffi_typedef(t["name"], type_ptr())
+                ffi_typedef_fn(t["name"], t["ret"], t["params"])
             elif k == "struct"
                 fields = []
                 for f in t["fields"]

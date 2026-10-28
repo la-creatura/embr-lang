@@ -38,6 +38,13 @@ inline parse_result parse_double(const char* first, const char* last, double& va
 static const char* R = "\033[31m", *Y = "\033[33m", *X = "\033[0m";
 
 // split source in lines for error
+// the folder a script's file is in, for SourceMap::setBaseDir. a name like <input> (not a file) gives the empty string
+inline std::string dirOfFile(const std::string& file) {
+    if (file.empty() || file[0] == '<') return std::string();
+    const size_t slash = file.find_last_of("/\\");
+    return slash == std::string::npos ? std::string() : file.substr(0, slash);
+}
+
 class SourceMap {
 public:
     SourceMap() = default;
@@ -62,8 +69,13 @@ public:
 
     bool empty() const { return lines_.empty(); }
 
+    // the folder of the file this text came from: where `const import "path"` looks for a relative path. empty: the current folder
+    const std::string& baseDir() const { return base_; }
+    void setBaseDir(std::string d) { base_ = std::move(d); }
+
 private:
     std::vector<std::string> lines_;
+    std::string              base_;
 };
 
 struct SourceRange {
@@ -117,6 +129,8 @@ struct EmbrError : std::runtime_error {
     std::vector<TraceFrame> trace;
     // an error a script must not be able to catch (the step or time limit ran out). try / catch skips it
     bool fatal = false;
+    // the raiser chose the kind on purpose (a C plugin's embrp_fail_kind): a call of a native does not replace it with the native's name
+    bool keepContext = false;
     explicit EmbrError(const std::string& formatted, bool loc = false, SourceRange r = {},
                         std::string raw = {}, std::string ctx = {})
         : std::runtime_error(formatted), hasLocation(loc), range(r),

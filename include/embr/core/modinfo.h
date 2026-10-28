@@ -67,6 +67,7 @@ struct ModuleInfo {
     bool        parsed = false;           // false when the file does not parse: nothing else is known
     bool        declared = false;         // has a `__module__`
     bool        dynamicImports = false;   // an import or load_module whose path is computed
+    bool        inlineC = false;          // has a `c """..."""` statement: C text for aembr, which counts as native code
     bool        compiled = false;         // a .vmbr file
     bool        noMetadata = false;       // a .vmbr file written without a description: nothing is known about it
     uint64_t    declaredCaps = 0, inferredCaps = 0;
@@ -224,6 +225,7 @@ inline ModuleInfo analyzeSource(const std::string& source, const std::string& pa
         Lexer lex(source);
         auto tokens = lex.tokenize();
         SourceMap sm = lex.sourceMap();
+        sm.setBaseDir(dirOfFile(path));
         Parser parser(std::move(tokens), sm);
         parser.collectErrors(&errors);
         prog = parser.parse();
@@ -299,6 +301,7 @@ inline ModuleInfo analyzeSource(const std::string& source, const std::string& pa
     };
     walkStmts(prog,
         [&](const Stmt* s) {
+            if (s->kind == Stmt::Kind::Expr && static_cast<const ExprStmt*>(s)->inlineC) info.inlineC = true;
             if (s->kind != Stmt::Kind::Import) return;
             const Expr* p = static_cast<const ImportStmt*>(s)->pathExpr.get();
             if (p && p->kind == Expr::Kind::String) addImport(static_cast<const StringExpr*>(p)->v, s->range.startLine);
@@ -346,6 +349,7 @@ inline void resolveModule(ModuleInfo& info, const PluginPolicy& policy, std::set
     namespace fs = std::filesystem;
     using namespace modinfo_detail;
     const std::string dir = fs::path(info.path).parent_path().string();
+    if (info.inlineC) info.inferredCaps |= EMBR_CAP_NATIVE;
     for (auto& imp : info.imports) {
         if (imp.plugin) {
             imp.found = pluginCaps(imp.path, dir, policy, imp.caps);
@@ -365,6 +369,8 @@ inline void resolveModule(ModuleInfo& info, const PluginPolicy& policy, std::set
     }
     // a declaration that leaves out something the module imports is wrong
     if (info.declared) {
+        if (info.inlineC && !(info.declaredCaps & EMBR_CAP_NATIVE))
+            info.problems.push_back({"declares " + capListText(info.declaredCaps) + " but has C text (c \"\"\" ... \"\"\"), which is native code. add native to \"capabilities\" in " + kModuleMetaName, {1, 1, 1, 1}});
         for (const auto& imp : info.imports) {
             uint64_t missing = imp.caps & ~info.declaredCaps;
             if (missing) info.problems.push_back({"declares " + capListText(info.declaredCaps) + " but imports \"" + imp.path + "\", which needs " + capListText(missing) +

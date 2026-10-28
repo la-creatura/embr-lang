@@ -284,6 +284,7 @@ struct CompiledChunk {
         typedParams = false;
         for (size_t i = 0; i < params.size() && simple; ++i) {
             if (params[i].variadic || paramSlots[i] < 0 || paramSlots[i] >= numLocalSlots) simple = false;
+            if (params[i].elem && params[i].elem->isFn) simple = false;     // a function type is checked for its number of arguments when called
             if (!params[i].type.isAny()) typedParams = true;
         }
         callKind = simple ? 1 : 2;
@@ -1455,6 +1456,8 @@ private:
         switch (s->kind) {
 
         case Stmt::Kind::Expr: {
+            if (static_cast<ExprStmt*>(s)->inlineC)
+                raiseError("compiler", "this is C text for aembr (c \"\"\" ... \"\"\"), embr cannot run it; compile the file with aembr", s->range);
             compileExpr(static_cast<ExprStmt*>(s)->expr.get());
             emit(Op::POP, 0, 0.0, s->range.startLine); // discard result
             break;
@@ -1605,6 +1608,8 @@ private:
 
         case Stmt::Kind::Fn: {
             auto* f = static_cast<FnStmt*>(s);
+            if (f->returnElem && f->returnElem->isHost)
+                raiseError("compiler", "the result type 'host' of '" + f->name + "' is for aembr, the compiler: embr does not run it", f->range);
             int fnIdx = compileFunction(
                 f->name, f->params, f->returnType,
                 f->body, f->range, cur_->sourceFile);
@@ -1818,6 +1823,12 @@ private:
         const SourceRange&        range,
         const std::string&        sourceFile)
     {
+        for (const Param& p : params)
+            if (p.elem && p.elem->isHost)
+                raiseError("compiler", "the parameter type 'host' of '" + name + "' is for aembr, the compiler: embr does not run it", range);
+        for (const Param& p : params)
+            if (p.def.kind != ParamDefault::None || p.inout)
+                raiseError("compiler", "a default value or an in-out parameter (&name) on '" + name + "' is for aembr, the compiler: embr does not run it", range);
         auto chunk = std::make_shared<CompiledChunk>();
         chunk->name       = name;
         chunk->params     = params;
@@ -2471,8 +2482,8 @@ public:
             } catch (EmbrError& e) {
                 if (!e.hasLocation && site.valid()) {
                     // carry over trace frames collected if this native called back into script code
-                    try { raiseError(c.name(), e.message, site, interp_.sourceMap()); }
-                    catch (EmbrError& located) { located.trace = std::move(e.trace); throw; }
+                    try { raiseError(e.keepContext ? e.context : c.name(), e.message, site, interp_.sourceMap()); }
+                    catch (EmbrError& located) { located.trace = std::move(e.trace); located.keepContext = e.keepContext; throw; }
                 }
                 throw;
             }
@@ -2659,8 +2670,8 @@ private:
             return c.typed.thunk(c.typed.fn, c.typed.ctx, args);
         } catch (EmbrError& e) {
             if (!e.hasLocation) {
-                try { raiseError(c.name(), e.message, errRange(line), interp_.sourceMap()); }
-                catch (EmbrError& located) { located.trace = std::move(e.trace); throw; }
+                try { raiseError(e.keepContext ? e.context : c.name(), e.message, errRange(line), interp_.sourceMap()); }
+                catch (EmbrError& located) { located.trace = std::move(e.trace); located.keepContext = e.keepContext; throw; }
             }
             throw;
         }
@@ -2807,7 +2818,9 @@ private:
             }
         // not found in this function or what it captured
         // if it's an existing Interpreter global update it there instead of shadowing it with a new local
-        if (interp_.has(name)) { interp_.set(name, std::move(v), hint); return; }
+        // (not from a function of an imported module: a temporary of library code must not write the importer's variable, it is a local.
+        // the module's own names were found above, in its scope)
+        if (interp_.has(name) && !(f.captured && f.captured->hasModule)) { interp_.set(name, std::move(v), hint); return; }
         // a name we've never seen. in the top-level frame it has to become a global, same as an assignment
         // at depth 0 (compiled to STORE_GLOBAL). otherwise a name first assigned inside an if/while at top
         // level becomes a frame-local that later splits from the global (this once made
@@ -2900,6 +2913,7 @@ private:
     // one step used: called on a backward jump and on a script call. see Interpreter::Budget
     void budgetStep() {
         uint64_t used = ++interp_.stepsUsed;
+        if (interp_.cancelFlag && interp_.cancelFlag->load(std::memory_order_relaxed)) budgetExceeded("cancelled");
         if (interp_.budget.maxSteps && used > interp_.budget.maxSteps)
             budgetExceeded("step limit of " + std::to_string(interp_.budget.maxSteps) + " steps reached");
         if (interp_.budget.seconds > 0 && (used & 1023) == 0 && std::chrono::steady_clock::now() > interp_.budget.deadline)
@@ -3073,8 +3087,8 @@ private:
             result = c.span(as);
         } catch (EmbrError& e) {
             if (!e.hasLocation) {
-                try { raiseError(c.name(), e.message, errRange(line), interp_.sourceMap()); }
-                catch (EmbrError& located) { located.trace = std::move(e.trace); throw; }
+                try { raiseError(e.keepContext ? e.context : c.name(), e.message, errRange(line), interp_.sourceMap()); }
+                catch (EmbrError& located) { located.trace = std::move(e.trace); located.keepContext = e.keepContext; throw; }
             }
             throw;
         }
@@ -4640,8 +4654,8 @@ private:
                     // own error didn't already carry a location. otherwise rethrow it as it was, so its kind ("assert",
                     // "error", a plugin's own tag, ...) reaches catch intact
                     if (!e.hasLocation) {
-                        try { raiseError(c.name(), e.message, errRange(line), interp_.sourceMap()); }
-                        catch (EmbrError& located) { located.trace = std::move(e.trace); throw; }
+                        try { raiseError(e.keepContext ? e.context : c.name(), e.message, errRange(line), interp_.sourceMap()); }
+                        catch (EmbrError& located) { located.trace = std::move(e.trace); located.keepContext = e.keepContext; throw; }
                     }
                     throw;
                 }
@@ -4754,6 +4768,26 @@ private:
         pushFrameSimple(chunk, captured, argc, returnType);
     }
 
+    // a function handed to a parameter of a written function type takes the number of arguments the type says. a native without a
+    // signature, and a function with optional or rest parameters, take more than one number, so they are let through when it fits any
+    void checkFnArity(const Value& f, const TypeAnn& want, const std::string& param, const std::string& fnName) {
+        const Value::Callable& c = f.asCallable();
+        size_t lo = 0, hi = 0;
+        if (c.isNative()) {
+            if (c.sig.empty()) return;
+            lo = c.sigInfo.minArgs; hi = c.sigInfo.maxArgs;
+        } else {
+            bool variadic = false;
+            for (const Param& p : c.script.params) { if (p.variadic) variadic = true; else { ++hi; if (!p.optional) ++lo; } }
+            if (variadic) hi = SIZE_MAX;
+        }
+        const size_t n = want.params.size();
+        if (n >= lo && n <= hi) return;
+        auto args = [](size_t k) { return std::to_string(k) + (k == 1 ? " argument" : " arguments"); };
+        vmError("argument '" + param + "' to '" + fnName + "': expected a function that takes " + args(n) + ", but got one that takes " +
+                (lo == hi ? args(lo) : "at least " + args(lo)), 0);
+    }
+
     // popCount values are taken off the value stack once the args are bound (the args live there for the stack path)
     void pushFrameImpl(
         CompiledChunk*                        chunk,
@@ -4775,6 +4809,8 @@ private:
             if (!p.type.isAny() && !p.type.contains(args[i].tag()))
                 vmError("argument '" + p.name + "' to '" + fnName + "': expected " +
                         p.type.name() + " but got " + args[i].typeName(), 0);
+            // a function type is only checked for how many arguments it takes, the rest of it is for the static checker
+            if (p.elem && p.elem->isFn && args[i].isCallable()) checkFnArity(args[i], *p.elem, p.name, fnName);
         }
         if (argc < fixedCount)
             vmError("'" + fnName + "' expects " + (hasVariadic ? "at least " : "") +
@@ -5318,10 +5354,12 @@ struct ModuleTypeResolver {
                 Lexer lex(*src);
                 auto tokens = lex.tokenize();
                 SourceMap sm = lex.sourceMap();
+                sm.setBaseDir(found.parent_path().string());
                 Parser parser(std::move(tokens), sm);
                 auto ast = parser.parse();
                 out = std::make_unique<typecheck::ModuleExports>();
                 typecheck::Options o = optionsFor(found.parent_path().string());
+                o.isModule = true;
                 o.source = &sm;
                 o.exportsOut = out.get();
                 (void)typecheck::check(ast, o);
@@ -5339,9 +5377,20 @@ inline CompiledProgram compileSource(const std::string& src,
     Lexer lex(src);
     auto tokens = lex.tokenize();
     SourceMap sm = lex.sourceMap();
+    sm.setBaseDir(dirOfFile(filename));
     interp.setSource(sm, filename);
     Parser parser(std::move(tokens), sm);
+    // the parser keeps going after an error to find the rest. all of them are shown, and the script does not run
+    std::vector<EmbrError> parseErrors;
+    parser.collectErrors(&parseErrors);
     auto ast = parser.parse();
+    if (parseErrors.size() == 1) throw parseErrors[0];
+    if (!parseErrors.empty()) {
+        std::string all;
+        for (const EmbrError& e : parseErrors) all += e.what();
+        const EmbrError& first = parseErrors[0];
+        throw EmbrError(all, first.hasLocation, first.range, first.message, first.context);
+    }
     if (opts.preloadPlugins) {
         // an import at the top of the file that can't fail the way a script module can: a plugin named by a literal.
         // a failure is left for the import itself to report when it runs
@@ -5358,6 +5407,7 @@ inline CompiledProgram compileSource(const std::string& src,
         ModuleTypeResolver modules(&interp);
         typecheck::Options topt = modules.optionsFor(interp.scriptDir);
         topt.closedWorld = opts.closedWorld;
+        topt.isModule = interp.insideImportedModule();
         topt.source = &sm;
         typecheck::ModuleExports made;
         topt.exportsOut = &made;

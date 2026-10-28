@@ -21,7 +21,7 @@
 #   constants       name -> number, string, or a map for a struct literal
 #   enums           enum name -> {member: value}
 #   types           the typedefs and structs in file order: {kind, name, ...}
-#                   kind is struct (fields), enum, alias (target), funcptr or opaque
+#                   kind is struct (fields), enum, alias (target), funcptr (with ret and params, like a function) or opaque
 #   structs         name -> arr of [field, c type]
 #   functions       name -> {ret, params, variadic}
 #   function_order  the function names in file order
@@ -988,7 +988,20 @@ fn __ch_typedef(toks)
     local p = __ch_index_of(toks, "(", 0)
     if p >= 0
         if p + 2 < len(toks) and toks[p + 1] == "*" and __ch_is_ident(toks[p + 2])
-            __ch_add_type({kind: "funcptr", name: toks[p + 2]})
+            local ret = slice(toks, 0, p)
+            local params = []
+            local close = -1
+            if p + 4 < len(toks) and toks[p + 3] == ")" and toks[p + 4] == "("
+                close = __ch_match(toks, p + 4)
+            end
+            if close >= 0
+                for q in __ch_split_commas(slice(toks, p + 5, close))
+                    if len(q) != 1 or q[0] != "void"
+                        append(&params, __ch_param_type(q))
+                    end
+                end
+            end
+            __ch_add_type({kind: "funcptr", name: toks[p + 2], ret: join(ret, " "), params: params})
         else
             __ch_note("skipped a typedef: " + join(toks, " "))
         end

@@ -64,6 +64,7 @@ struct RefExpr    : Expr { ExprPtr target;                                RefExp
 struct LambdaExpr : Expr {
     std::vector<Param>          params;
     TypeSet                     returnType = TypeSet::Any();
+    bool                        returnWritten = false;   // `-> type` was written (so `-> any` can be told from no return type)
     TypeElem                    returnElem;
     const std::vector<StmtPtr>* body;
     std::vector<StmtPtr>        ownedBody;
@@ -128,6 +129,7 @@ struct FnStmt     : Stmt {
     std::string        name;
     std::vector<Param> params;
     TypeSet            returnType = TypeSet::Any();
+    bool               returnWritten = false;   // `-> type` was written (so `-> any` can be told from no return type)
     TypeElem           returnElem;
     std::vector<StmtPtr> body;
     // written as `name(params) = expr`. the compiler may write the expression into the calls of it, see the wiki's syntax page
@@ -153,7 +155,8 @@ struct ForStmt : Stmt {
 };
 struct BreakStmt    : Stmt { BreakStmt():Stmt(Kind::Break){} };
 struct ContinueStmt : Stmt { ContinueStmt():Stmt(Kind::Continue){} };
-struct ExprStmt   : Stmt { ExprPtr expr; ExprStmt():Stmt(Kind::Expr){} };
+// `c """ ... """`: C text for aembr to put in the compiled program as it is. `expr` is the StringExpr with the text. the VM refuses it
+struct ExprStmt   : Stmt { ExprPtr expr; bool inlineC = false; bool cFileScope = false; std::string cFile; ExprStmt():Stmt(Kind::Expr){} };   // cFile: the file `const c import` read the text from, for the compiler's messages
 // try ... catch e ... end
 // catchVar is bound to the raised error's message for the duration of catchBlock only then goes out of scope
 struct TryStmt : Stmt {

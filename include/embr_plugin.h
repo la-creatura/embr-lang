@@ -221,6 +221,24 @@ struct EmbrApi {
     /* the folder of the script that is running, where a relative path resolves ("" when there is none, as in the REPL: then
        use the process's working folder). valid until the function returns */
     const char*        (*script_dir)(EmbrCtx* ctx);
+    /* added later within version 1. a host built before them has a smaller table, so ask first: embrp_has_bulk() for the first three,
+       and embrp_fail_kind() falls back to embrp_fail by itself */
+    /* the elements of an array as one block of EmbrValue, read only, valid until the function returns. NULL (and *len 0) when it is not
+       an array. a lazy range is turned into an array first. saves one call per element */
+    const EmbrValue*   (*array_data)(EmbrCtx* ctx, const EmbrValue* v, size_t* len);
+    /* append n numbers at once */
+    int                (*array_push_ints)(EmbrCtx* ctx, EmbrValue* array, const int64_t* xs, size_t n);
+    int                (*array_push_floats)(EmbrCtx* ctx, EmbrValue* array, const double* xs, size_t n);
+    /* like fail, but the script's e["kind"] is `kind` instead of the label "[plugin:function]" */
+    int                (*fail_kind)(EmbrCtx* ctx, const char* kind, const char* message);
+    /* the words after the script name on the command line (embr script.embr -- a b gives "a", "b"). NULL past the end */
+    size_t             (*script_arg_count)(EmbrCtx* ctx);
+    const char*        (*script_arg)(EmbrCtx* ctx, size_t i, size_t* len);
+    /* raw bytes to the host's standard output (fd 1) or error (fd 2), in order with what print() writes. 0, or nonzero with the error recorded */
+    int                (*stdio_write)(EmbrCtx* ctx, int fd, const char* p, size_t n);
+    int                (*stdio_flush)(EmbrCtx* ctx);
+    /* up to n raw bytes from the host's standard input. it waits until n bytes came, so fewer means end of input */
+    size_t             (*stdin_read)(EmbrCtx* ctx, char* buf, size_t n);
 };
 
 /* reading straight from the value */
@@ -279,6 +297,24 @@ static inline EmbrRoot*       embrp_root(EmbrCtx* c, const EmbrValue* v) { retur
 static inline const EmbrValue* embrp_root_get(EmbrCtx* c, const EmbrRoot* r) { return c->api->root_get(r); }
 static inline void            embrp_unroot(EmbrCtx* c, EmbrRoot* r) { c->api->unroot(c, r); }
 static inline const char*     embrp_script_dir(EmbrCtx* c) { return c->api->script_dir(c); }
+
+/* the calls added after the first table. a plugin built with this header can run on an older embr: it checks the size of the table it got */
+#define EMBRP_HAS_(c, member) ((c)->api->struct_size >= offsetof(EmbrApi, member) + sizeof((c)->api->member))
+static inline int             embrp_has_bulk(EmbrCtx* c) { return EMBRP_HAS_(c, array_push_floats); }
+static inline const EmbrValue* embrp_array_data(EmbrCtx* c, const EmbrValue* v, size_t* len) { return c->api->array_data(c, v, len); }
+static inline int             embrp_array_push_ints(EmbrCtx* c, EmbrValue* a, const int64_t* xs, size_t n) { return c->api->array_push_ints(c, a, xs, n); }
+static inline int             embrp_array_push_floats(EmbrCtx* c, EmbrValue* a, const double* xs, size_t n) { return c->api->array_push_floats(c, a, xs, n); }
+static inline int             embrp_fail_kind(EmbrCtx* c, const char* kind, const char* msg) {
+    return EMBRP_HAS_(c, fail_kind) ? c->api->fail_kind(c, kind, msg) : c->api->fail(c, msg);
+}
+
+/* the standard streams and the script's arguments, added last: ask first with embrp_has_stdio() */
+static inline int             embrp_has_stdio(EmbrCtx* c) { return EMBRP_HAS_(c, stdin_read); }
+static inline size_t          embrp_script_arg_count(EmbrCtx* c) { return c->api->script_arg_count(c); }
+static inline const char*     embrp_script_arg(EmbrCtx* c, size_t i, size_t* len) { return c->api->script_arg(c, i, len); }
+static inline int             embrp_stdio_write(EmbrCtx* c, int fd, const char* p, size_t n) { return c->api->stdio_write(c, fd, p, n); }
+static inline int             embrp_stdio_flush(EmbrCtx* c) { return c->api->stdio_flush(c); }
+static inline size_t          embrp_stdin_read(EmbrCtx* c, char* buf, size_t n) { return c->api->stdin_read(c, buf, n); }
 
 #ifdef __cplusplus
 }

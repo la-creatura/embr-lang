@@ -57,6 +57,7 @@ private:
 
     bool eof()  const { return pos_ >= s_.size(); }
     char peek() const { return eof() ? '\0' : s_[pos_]; }
+    char peek(size_t n) const { return pos_ + n < s_.size() ? s_[pos_ + n] : '\0'; }
     char get() {
         char c = s_[pos_++];
         if (c == '\n') { ++line_; col_ = 1; } else ++col_;
@@ -95,6 +96,20 @@ private:
 
     Token lexNum() {
         int sl = line_, sc = col_; std::string t; bool dot = false;
+        // 0x1F and 0b101: the token keeps the text as written, intLiteral() (token.h) reads the value
+        if (peek() == '0' && pos_ + 1 < s_.size() && (s_[pos_ + 1] == 'x' || s_[pos_ + 1] == 'X' || s_[pos_ + 1] == 'b' || s_[pos_ + 1] == 'B')) {
+            bool hex = s_[pos_ + 1] == 'x' || s_[pos_ + 1] == 'X';
+            t += get(); t += get();
+            auto ok = [&](char c) { return hex ? std::isxdigit((unsigned char)c) != 0 : (c == '0' || c == '1'); };
+            while (!eof() && ok(peek())) t += get();
+            if (t.size() == 2)
+                raiseError("lexer", hex ? "hex literal has no digits" : "binary literal has no digits", {sl,sc,line_,col_}, map_);
+            if (!eof() && (std::isalnum((unsigned char)peek()) || peek() == '_' || peek() == '.'))
+                raiseError("lexer", "invalid digit in number literal", {sl,sc,line_,col_}, map_);
+            if (!intLiteral(t))
+                raiseError("lexer", "number literal does not fit an int", {sl,sc,line_,col_}, map_);
+            return {TokenType::Number, t, sl, sc};
+        }
         while (!eof() && (std::isdigit(peek()) || peek() == '.')) {
             if (peek() == '.') {
                 if (pos_ + 1 < s_.size() && s_[pos_ + 1] == '.') break;   // `0...10`: the dots are the range's, not a decimal point
@@ -135,7 +150,18 @@ private:
                                  out += (char)(0x80 | ((cp >> 6) & 0x3F)); out += (char)(0x80 | (cp & 0x3F)); }
     }
 
+    // `"""text"""`: everything up to the next three quotes, as written. no escapes
+    Token lexRaw() {
+        int sl = line_, sc = col_; get(); get(); get(); std::string t;
+        while (!eof()) {
+            if (peek() == '"' && peek(1) == '"' && peek(2) == '"') { get(); get(); get(); return {TokenType::RawString, t, sl, sc}; }
+            t += get();
+        }
+        raiseError("lexer", "unterminated \"\"\" text", {sl, sc, line_, col_}, map_);
+    }
+
     Token lexStr() {
+        if (peek(1) == '"' && peek(2) == '"') return lexRaw();
         int sl = line_, sc = col_; get(); std::string t;
         while (!eof()) {
             char c = get();

@@ -16,6 +16,11 @@
 #include "typed.h"
 
 #include <algorithm>
+#include <iostream>
+#if defined(_WIN32)
+#  include <fcntl.h>
+#  include <io.h>
+#endif
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -38,6 +43,7 @@ struct Ctx : EmbrCtx {
     Interpreter*                        interp = nullptr;
     bool                                failed = false;
     char                                error[512];
+    char                                kind[48] = {0};      // the error kind the plugin asked for (fail_kind), empty: the label of the function
     // temp slots: the first few live in the Ctx itself (built only when asked for), the rest in a vector
     alignas(Value) unsigned char        inl[4 * sizeof(Value)];
     int                                 ninl = 0;
@@ -57,6 +63,12 @@ struct Ctx : EmbrCtx {
         failed = true;
         std::strncpy(error, msg, sizeof error - 1);
         error[sizeof error - 1] = 0;
+    }
+    void setError(const char* k, const char* msg) {
+        if (failed) return;
+        setError(msg);
+        std::strncpy(kind, k ? k : "", sizeof kind - 1);
+        kind[sizeof kind - 1] = 0;
     }
 };
 
@@ -195,6 +207,66 @@ inline const EmbrApi* api() {
         };
         a.root_get = [](const EmbrRoot* r) -> const EmbrValue* { return reinterpret_cast<const EmbrValue*>(r); };
         a.script_dir = [](EmbrCtx* c) -> const char* { return static_cast<Ctx*>(c)->interp->scriptDir.c_str(); };
+        a.array_data = [](EmbrCtx* c, const EmbrValue* v, size_t* len) -> const EmbrValue* {
+            static const EmbrValue none{};
+            *len = 0;
+            const std::vector<Value>* arr = nullptr;
+            try { arr = V(v).arrayLike(); }       // a lazy range is made here, and is refused when it is too long
+            catch (const std::exception& e) { static_cast<Ctx*>(c)->setError(e.what()); return nullptr; }
+            if (!arr) return nullptr;
+            *len = arr->size();
+            return arr->empty() ? &none : reinterpret_cast<const EmbrValue*>(arr->data());
+        };
+        a.array_push_ints = [](EmbrCtx* c, EmbrValue* arr, const int64_t* xs, size_t n) -> int {
+            return guarded(c, [&] { for (size_t i = 0; i < n; ++i) V(arr).arrayAppend(Value(xs[i])); });
+        };
+        a.array_push_floats = [](EmbrCtx* c, EmbrValue* arr, const double* xs, size_t n) -> int {
+            return guarded(c, [&] { for (size_t i = 0; i < n; ++i) V(arr).arrayAppend(Value(xs[i])); });
+        };
+        a.fail_kind = [](EmbrCtx* c, const char* kind, const char* msg) -> int {
+            static_cast<Ctx*>(c)->setError(kind, msg ? msg : "error");
+            return 1;
+        };
+        a.script_arg_count = [](EmbrCtx* c) -> size_t { return static_cast<Ctx*>(c)->interp->scriptArgs.size(); };
+        a.script_arg = [](EmbrCtx* c, size_t i, size_t* len) -> const char* {
+            const auto& args = static_cast<Ctx*>(c)->interp->scriptArgs;
+            if (i >= args.size()) { if (len) *len = 0; return nullptr; }
+            if (len) *len = args[i].size();
+            return args[i].c_str();
+        };
+        // the streams print() and input() use, so the order stays right. on windows a stream is switched to binary mode
+        // on first use, or it would turn \n into \r\n and stop at ^Z
+        a.stdio_write = [](EmbrCtx* c, int fd, const char* p, size_t n) -> int {
+            Ctx* ctx = static_cast<Ctx*>(c);
+#if defined(_WIN32)
+            static bool bin[3] = {false, false, false};
+            if (fd >= 0 && fd <= 2 && !bin[fd]) { bin[fd] = true; std::cout.flush(); _setmode(fd, _O_BINARY); }
+#endif
+            if (fd == 2) {
+                std::cout.flush();
+                std::cerr.write(p, (std::streamsize)n);
+                std::cerr.flush();
+                if (!std::cerr) { ctx->setError("write failed"); return 1; }
+            } else {
+                std::cout.write(p, (std::streamsize)n);
+                if (!std::cout) { ctx->setError("write failed"); return 1; }
+            }
+            return 0;
+        };
+        a.stdio_flush = [](EmbrCtx* c) -> int {
+            std::cout.flush();
+            if (!std::cout) { static_cast<Ctx*>(c)->setError("flush failed"); return 1; }
+            return 0;
+        };
+        a.stdin_read = [](EmbrCtx*, char* buf, size_t n) -> size_t {
+#if defined(_WIN32)
+            static bool bin = (_setmode(0, _O_BINARY), true); (void)bin;
+#endif
+            std::cin.read(buf, (std::streamsize)n);
+            size_t got = (size_t)std::cin.gcount();
+            if (std::cin.eof()) std::cin.clear(std::ios::eofbit);   // keep eof, but let a later read ask again
+            return got;
+        };
         a.unroot = [](EmbrCtx* c, EmbrRoot* r) {
             Ctx* ctx = static_cast<Ctx*>(c);
             Value* v = reinterpret_cast<Value*>(r);
@@ -223,7 +295,12 @@ inline Value call(const Bound& b, const Value* args, size_t n) {
     ctx.interp = b.interp;
     Value out;
     int rc = b.fn(&ctx, reinterpret_cast<const EmbrValue*>(args), n, reinterpret_cast<EmbrValue*>(&out));
-    if (rc != 0 || ctx.failed) raiseError(b.label, ctx.failed ? ctx.error : "failed");
+    if (rc != 0 || ctx.failed) {
+        if (!ctx.kind[0]) raiseError(b.label, ctx.failed ? ctx.error : "failed");
+        // a kind the plugin chose: it has to survive the native call that re-raises with a position (keepContext)
+        try { raiseError(ctx.kind, ctx.error); }
+        catch (EmbrError& e) { e.keepContext = true; throw; }
+    }
     return out;
 }
 

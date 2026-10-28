@@ -10,6 +10,8 @@
 //     if a token or a comment differs it throws instead of returning, so a formatter bug can
 //     never change what a program does.
 //   - indent is 4 spaces per level by default, like the rest of the repo's .embr files.
+//   - a run of two or more `name = value` lines that you lined up on the `=` stays lined up (same indent, same column).
+//     one space is used everywhere else.
 //   - it never joins or splits lines, and never wraps long ones.
 //   - blank lines are kept, but a run of them becomes one.
 
@@ -39,8 +41,10 @@ struct Piece {
     std::string raw;                  // exact source text of the token
     int         newlinesBefore = 0;   // newlines between the previous token (or comment) and this one
     std::vector<Comment> before;      // comments between the previous token and this one
+    int         gapBefore = -1;       // spaces between the previous token and this one on the same line, -1 when anything else is between them
     bool        touchesPrev = false;  // no space or comment between the previous token and this one
     bool        inElemType = false;   // part of an element type written `arr<int>`: the `<`, `>` and the names between them, which take no spaces
+    bool        fnType = false;       // an `fn` that starts a function type (`f: fn(int) -> int`), not a function with a body: it opens no block
 };
 
 struct Scanned {
@@ -55,7 +59,26 @@ inline bool isTypeWord(const std::string& w) {
            w == "integer" || w == "str" || w == "string" || w == "fn" || w == "func" || w == "function" || w == "ptr" || w == "pointer" || w == "any";
 }
 // the type name at i with an optional <...>; returns the index after it, or 0 when there is none. marks when `mark`
+inline size_t matchElemType(std::vector<Piece>& ps, size_t i, bool mark);
+// a function type `fn(int, str) -> int` at i (the result is optional); returns the index after it, or 0. what is inside keeps its own spacing
+inline size_t matchFnType(std::vector<Piece>& ps, size_t i, bool mark) {
+    if (i + 1 >= ps.size() || ps[i].type != TokenType::Fn || ps[i + 1].type != TokenType::LParen || !ps[i + 1].touchesPrev) return 0;
+    size_t k = i + 1;
+    for (int depth = 0; k < ps.size(); ++k) {
+        if (ps[k].type == TokenType::LParen) ++depth;
+        else if (ps[k].type == TokenType::RParen && --depth == 0) break;
+    }
+    if (k >= ps.size()) return 0;
+    size_t after = k + 1;
+    if (after < ps.size() && ps[after].type == TokenType::RArrow) {
+        const size_t r = matchElemType(ps, after + 1, mark);
+        if (r == 0) return 0;
+        after = r;
+    }
+    return after;
+}
 inline size_t matchElemType(std::vector<Piece>& ps, size_t i, bool mark) {
+    if (i < ps.size() && ps[i].type == TokenType::Fn) return matchFnType(ps, i, mark);
     if (i >= ps.size() || ps[i].type != TokenType::Identifier || !isTypeWord(ps[i].raw)) return 0;
     const bool container = ps[i].raw == "arr" || ps[i].raw == "array" || ps[i].raw == "map";
     if (!container || i + 1 >= ps.size() || ps[i + 1].type != TokenType::Less || !ps[i + 1].touchesPrev) return i + 1;
@@ -70,6 +93,19 @@ inline void markElemTypes(std::vector<Piece>& ps) {
         if (ps[i].type != TokenType::Identifier || !ps[i + 1].touchesPrev || ps[i + 1].type != TokenType::Less) continue;
         size_t end = matchElemType(ps, i, false);
         if (end > i + 1) { matchElemType(ps, i, true); i = end - 1; }
+    }
+    // the `fn` that starts a function type: after `local`, after `<` of an element type, and inside the parentheses of another function type.
+    // after `:` and `->` it already opens no block. (`x: fn` also can not tell a map value `"k": fn() ... end`, which stays as it was)
+    std::vector<bool> typeGroup;      // for each open parenthesis: is it the parameter list of a function type
+    for (size_t i = 0; i < ps.size(); ++i) {
+        const TokenType t = ps[i].type;
+        if (t == TokenType::Fn && i > 0) {
+            const TokenType pv = ps[i - 1].type;
+            const bool inGroup = (pv == TokenType::LParen || pv == TokenType::Comma) && !typeGroup.empty() && typeGroup.back();
+            if (pv == TokenType::Local || pv == TokenType::Colon || pv == TokenType::RArrow || (pv == TokenType::Less && ps[i - 1].inElemType) || inGroup) ps[i].fnType = true;
+        }
+        if (t == TokenType::LParen) typeGroup.push_back(i > 0 && ps[i - 1].type == TokenType::Fn && ps[i - 1].fnType);
+        else if (t == TokenType::RParen && !typeGroup.empty()) typeGroup.pop_back();
     }
 }
 
@@ -121,12 +157,19 @@ inline Scanned scan(const std::string& src) {
             while (end < src.size() && src[end] != '"') end += src[end] == '\\' ? 2 : 1;
             ++end;
         }
+        if (t.type == TokenType::RawString) {         // the text is not escaped: it ends at the next three quotes
+            const size_t close = src.find("\"\"\"", start + 3);
+            end = close == std::string::npos ? src.size() : close + 3;
+        }
         Piece p;
         p.type = t.type;
         p.raw = src.substr(start, end - start);
         p.newlinesBefore = nl;
         p.before = std::move(gap);
         p.touchesPrev = start == prevEnd && !out.pieces.empty();
+        if (nl == 0 && p.before.empty() && !out.pieces.empty() && start >= prevEnd &&
+            src.find_first_not_of(' ', prevEnd) >= start)
+            p.gapBefore = (int)(start - prevEnd);
         out.pieces.push_back(std::move(p));
         prevEnd = end;
     }
@@ -170,6 +213,27 @@ struct Layout {
     TokenType prev = TokenType::Eof;
     TokenType prevPrev = TokenType::Eof;
 
+    // a run of consecutive `name = value` lines the user lined up on the `=` stays lined up. such a line is held back here
+    // until the run ends. a run is lines at one indent where every name plus the spaces after it is equally wide
+    // (the `=` is in one column) and at least one has more than one space. anything else is written with one space.
+    struct Held { int indent; std::string line; int nameLen; int gap; };
+    std::vector<Held> run;
+    int candState = 0;         // 1 = the line started with a name, 2 = and `=` followed it on the same line
+    int candName = 0, candGap = 0;
+    size_t candDepth = 0;      // frames open when the line started
+
+    void flushRun() {
+        bool aligned = run.size() >= 2;
+        bool wide = false;
+        for (const Held& h : run) wide = wide || h.gap > 1;
+        for (const Held& h : run) {
+            std::string l = h.line;
+            if (aligned && wide) l.insert((size_t)h.nameLen, (size_t)(h.gap - 1), ' ');
+            out += std::string((size_t)std::min(h.indent, kMaxIndentLevels) * (size_t)indentWidth, ' ') + l + "\n";
+        }
+        run.clear();
+    }
+
     int innerLevel() const { return frames.empty() ? 0 : frames.back() + 1; }
 
     int indentLevel(TokenType first) const {
@@ -181,8 +245,18 @@ struct Layout {
 
     void flushLine(int indent) {
         if (line.empty()) return;
-        if (pendingBlank && anyLine) out += "\n";
+        bool cand = candState == 2 && frames.size() == candDepth;
+        candState = 0;
+        if (!run.empty() && (!cand || run.back().indent != indent || run.back().nameLen + run.back().gap != candName + candGap)) flushRun();
+        if (pendingBlank && anyLine) { flushRun(); out += "\n"; }
         pendingBlank = false;
+        if (cand) {
+            run.push_back({indent, line, candName, candGap});
+            anyLine = true;
+            line.clear();
+            lineHasCode = false;
+            return;
+        }
         out += std::string((size_t)std::min(indent, kMaxIndentLevels) * (size_t)indentWidth, ' ') + line + "\n";
         anyLine = true;
         line.clear();
@@ -217,7 +291,14 @@ struct Layout {
         if (startsLine) {
             endLine();
             lineIndent = indentLevel(p.type);
+            candState = p.type == T::Identifier ? 1 : 0;
+            candName = (int)p.raw.size();
+            candDepth = frames.size();
             // an fn used as a type name (x: fn) opens no block, see below
+        }
+        if (candState == 1 && !startsLine) {   // the second token of the line decides
+            if (p.type == T::Equal && p.gapBefore >= 1) { candState = 2; candGap = p.gapBefore; }
+            else candState = 0;
         }
         if (p.inElemType) { /* part of an element type: written together */ }
         else if (p.type == T::Greater && prev == T::Greater && p.touchesPrev) { /* the two halves of a >> shift */ }
@@ -233,7 +314,7 @@ struct Layout {
 
         bool isOpener = p.type == T::If || p.type == T::While || p.type == T::For || p.type == T::Try ||
                         p.type == T::LParen || p.type == T::LBracket || p.type == T::LCurly ||
-                        (p.type == T::Fn && prev != T::Colon && prev != T::RArrow);
+                        (p.type == T::Fn && !p.fnType && prev != T::Colon && prev != T::RArrow);
         bool isCloser = p.type == T::End || p.type == T::RParen || p.type == T::RBracket || p.type == T::RCurly;
         if (isOpener) frames.push_back(lineIndent);
         else if (isCloser && !frames.empty()) frames.pop_back();
@@ -291,6 +372,7 @@ inline std::string layout(const Scanned& s, int indentWidth) {
         first = false;
     }
     L.endLine();
+    L.flushRun();
     return L.out;
 }
 

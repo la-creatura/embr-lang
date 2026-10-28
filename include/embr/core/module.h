@@ -183,6 +183,7 @@ inline std::string importPluginFrom(Interpreter& interp, const std::string& rawP
 inline std::string importNativePlugin(Interpreter& interp, const std::string& rawPath, bool runModules = true) {
     std::string denied = interp.pluginPolicy.check(rawPath);
     if (!denied.empty()) return denied;
+    if (interp.loadedPluginNames_.count(rawPath)) return "";   // already loaded here, the same name means the same plugin
 
     std::vector<std::filesystem::path> cands;
     {
@@ -210,7 +211,9 @@ inline std::string importNativePlugin(Interpreter& interp, const std::string& ra
     } else {
         cands = fileCandidates(rawPath, interp.scriptDir, PLUGIN_EXT, "plugins");
     }
-    return importPluginFrom(interp, rawPath, cands, nullptr);
+    std::string why = importPluginFrom(interp, rawPath, cands, nullptr);
+    if (why.empty()) interp.loadedPluginNames_.insert(rawPath);
+    return why;
 }
 
 // opens the first library in `cands` that opens and registers it. `claim`: it comes from a package, which says what it is
